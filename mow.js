@@ -318,16 +318,22 @@ export function analyze(data, grassKey = 'cool', nowMs = Date.now()) {
     return h;
   });
 
-  const future = hours.filter((h) => !h.past);
-  const windows = findWindows(future);
+  const allFuture = hours.filter((h) => !h.past);
 
   // One row per calendar day, today forward.
   const byDay = new Map();
-  for (const h of future) {
+  for (const h of allFuture) {
     if (!byDay.has(h.day)) byDay.set(h.day, []);
     byDay.get(h.day).push(h);
   }
-  const days = [...byDay.entries()].slice(0, 8).map(([day, hs]) => {
+
+  // Only consider the days the page actually shows, so the recommended window
+  // can never land on a day the reader can't see in the list.
+  const shownDays = new Set([...byDay.keys()].slice(0, 7));
+  const future = allFuture.filter((h) => shownDays.has(h.day));
+  const windows = findWindows(future);
+
+  const days = [...byDay.entries()].slice(0, 7).map(([day, hs]) => {
     // No recency discount within a single day — we just want that day's best.
     const dayWindows = findWindows(hs, { decayPerDay: 0 });
     return { day, hours: hs, best: dayWindows[0] || null, peak: Math.max(0, ...hs.map((h) => h.score)) };

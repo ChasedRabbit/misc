@@ -31,6 +31,9 @@ export function makeDemoData(nowMs = Date.now(), opts = {}) {
   const wind_speed_10m = [];
   const cloud_cover = [];
   const is_day = [];
+  // Ground temperature lags and damps the air temperature. The mowing tool
+  // ignores this column; the retaining-wall tool uses it for frozen ground.
+  const soil_temperature_0cm = [];
 
   const daily = {
     time: [],
@@ -85,6 +88,9 @@ export function makeDemoData(nowMs = Date.now(), opts = {}) {
       wind_speed_10m.push(Math.round((5 + Math.sin(d + h / 5) * 4 + (raining ? 9 : 0)) * 10) / 10);
       cloud_cover.push(Math.round(cloud));
       is_day.push(h >= SUNRISE && h < SUNSET ? 1 : 0);
+      // Damped toward the day's mean and shifted a few hours later.
+      const dayMean = (baseHigh + baseLow) / 2;
+      soil_temperature_0cm.push(Math.round((dayMean + (t - dayMean) * 0.45) * 10) / 10);
     }
 
     daily.time.push(key);
@@ -110,6 +116,7 @@ export function makeDemoData(nowMs = Date.now(), opts = {}) {
       wind_speed_10m,
       cloud_cover,
       is_day,
+      soil_temperature_0cm,
     },
     daily,
   };
