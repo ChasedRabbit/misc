@@ -1,0 +1,549 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>Mow Window — when to cut the grass this week</title>
+<meta name="description" content="Finds the best hours this week to mow, using rain, dew, frost and heat.">
+<style>
+  :root {
+    color-scheme: light;
+    --surface-1: #fcfcfb;
+    --plane: #f9f9f7;
+    --text-primary: #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted: #898781;
+    --grid: #e1e0d9;
+    --baseline: #c3c2b7;
+    --border: rgba(11, 11, 11, 0.10);
+    /* Reserved status palette — state, never series. */
+    --go: #0ca30c;
+    --marginal: #fab219;
+    --no: #d03b3b;
+    --blocked: #d8d7d0;
+    --on-marginal: #3a2a00;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) {
+      color-scheme: dark;
+      --surface-1: #1a1a19;
+      --plane: #0d0d0d;
+      --text-primary: #ffffff;
+      --text-secondary: #c3c2b7;
+      --text-muted: #898781;
+      --grid: #2c2c2a;
+      --baseline: #383835;
+      --border: rgba(255, 255, 255, 0.10);
+      --blocked: #35352f;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --surface-1: #1a1a19;
+    --plane: #0d0d0d;
+    --text-primary: #ffffff;
+    --text-secondary: #c3c2b7;
+    --text-muted: #898781;
+    --grid: #2c2c2a;
+    --baseline: #383835;
+    --border: rgba(255, 255, 255, 0.10);
+    --blocked: #35352f;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--plane);
+    color: var(--text-primary);
+    font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+    -webkit-text-size-adjust: 100%;
+    padding: 0 0 env(safe-area-inset-bottom);
+  }
+  .wrap { max-width: 620px; margin: 0 auto; padding: 16px 16px 48px; }
+
+  header { display: flex; align-items: baseline; gap: 8px; padding: 8px 0 16px; }
+  h1 { font-size: 17px; font-weight: 600; margin: 0; letter-spacing: -0.01em; }
+  header .spacer { flex: 1; }
+
+  button {
+    font: inherit; color: inherit; cursor: pointer;
+    background: var(--surface-1); border: 1px solid var(--border);
+    border-radius: 10px; padding: 8px 12px; min-height: 40px;
+  }
+  button:active { transform: translateY(1px); }
+  .link-btn {
+    background: none; border: none; padding: 6px 2px; min-height: 32px;
+    color: var(--text-secondary); text-decoration: underline; font-size: 14px;
+  }
+
+  .card {
+    background: var(--surface-1); border: 1px solid var(--border);
+    border-radius: 14px; padding: 16px; margin-bottom: 12px;
+  }
+
+  .eyebrow {
+    font-size: 12px; font-weight: 600; letter-spacing: 0.07em;
+    text-transform: uppercase; color: var(--text-muted); margin-bottom: 6px;
+  }
+  .hero-figure { font-size: 34px; line-height: 1.1; font-weight: 650; letter-spacing: -0.02em; }
+  .hero-when { font-size: 19px; font-weight: 550; color: var(--text-secondary); margin-top: 2px; }
+  .hero-sub { color: var(--text-secondary); margin-top: 10px; font-size: 15px; }
+
+  /* Status is never carried by color alone: dot + word, every time. */
+  .status-row { display: flex; align-items: flex-start; gap: 10px; }
+  .dot {
+    width: 12px; height: 12px; border-radius: 50%; flex: none; margin-top: 6px;
+    box-shadow: 0 0 0 2px var(--surface-1);
+  }
+  .dot.go { background: var(--go); }
+  .dot.marginal { background: var(--marginal); }
+  .dot.poor { background: var(--no); }
+  .dot.blocked { background: var(--blocked); }
+  .status-word { font-weight: 600; }
+
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 2px 0 14px; }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--text-secondary); }
+  .legend i { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+
+  .day { border-top: 1px solid var(--grid); padding: 10px 0 8px; }
+  .day:first-of-type { border-top: none; }
+  .day-head {
+    display: flex; align-items: baseline; gap: 8px;
+    width: 100%; background: none; border: none; padding: 4px 0; text-align: left;
+    min-height: 44px; /* thumb-sized hit target, larger than the marks it controls */
+  }
+  .day-name { font-weight: 600; font-size: 15px; min-width: 92px; }
+  .day-best { color: var(--text-secondary); font-size: 15px; flex: 1; }
+  .day-best.none { color: var(--text-muted); }
+  .chev { color: var(--text-muted); font-size: 12px; }
+
+  /* Hourly strip: one cell per daylight hour, 2px surface gaps between fills. */
+  .strip { display: flex; gap: 2px; margin-top: 6px; }
+  .strip .cell { flex: 1; height: 22px; border-radius: 3px; background: var(--blocked); }
+  .strip .cell.go { background: var(--go); }
+  .strip .cell.marginal { background: var(--marginal); }
+  .strip .cell.poor { background: var(--no); }
+  .strip .cell.now { box-shadow: inset 0 0 0 2px var(--text-primary); }
+  .ticks { display: flex; justify-content: space-between; font-size: 11px; color: var(--text-muted); margin-top: 3px; }
+
+  .hours { margin: 8px 0 4px; display: none; }
+  .day.open .hours { display: block; }
+  .hour-row { display: flex; align-items: center; gap: 10px; padding: 5px 0; font-size: 14px; border-top: 1px solid var(--grid); }
+  .hour-row .t { width: 56px; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+  .hour-row .w { flex: 1; color: var(--text-secondary); }
+  .hour-row .s { font-variant-numeric: tabular-nums; color: var(--text-muted); }
+
+  .growth-val { font-size: 22px; font-weight: 600; }
+  .muted { color: var(--text-secondary); font-size: 14.5px; }
+  .tiny { color: var(--text-muted); font-size: 12.5px; }
+
+  .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+  .seg button { border: none; border-radius: 0; background: none; padding: 9px 12px; font-size: 14px; }
+  .seg button[aria-pressed="true"] { background: var(--grid); font-weight: 600; }
+
+  form.search { display: flex; gap: 8px; margin-top: 10px; }
+  form.search input {
+    flex: 1; font: inherit; padding: 10px 12px; min-height: 44px;
+    border: 1px solid var(--border); border-radius: 10px;
+    background: var(--plane); color: var(--text-primary);
+  }
+  .results { list-style: none; margin: 10px 0 0; padding: 0; }
+  .results li { border-top: 1px solid var(--grid); }
+  .results button { width: 100%; text-align: left; background: none; border: none; border-radius: 0; padding: 12px 2px; min-height: 48px; }
+
+  .banner { border-radius: 10px; padding: 10px 12px; font-size: 14px; margin-bottom: 12px; border: 1px solid var(--border); }
+  .banner.warn { background: color-mix(in srgb, var(--marginal) 14%, var(--surface-1)); }
+  .banner.err { background: color-mix(in srgb, var(--no) 12%, var(--surface-1)); }
+
+  table { border-collapse: collapse; width: 100%; font-size: 13.5px; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--grid); font-variant-numeric: tabular-nums; }
+  th { color: var(--text-muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; }
+  .table-scroll { overflow-x: auto; }
+  details > summary { cursor: pointer; padding: 10px 0; color: var(--text-secondary); font-size: 14px; min-height: 44px; }
+
+  footer { color: var(--text-muted); font-size: 12.5px; margin-top: 20px; line-height: 1.6; }
+  footer a { color: var(--text-muted); }
+  .hidden { display: none !important; }
+  @media (prefers-reduced-motion: no-preference) {
+    .card { transition: none; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Mow Window</h1>
+    <span class="spacer"></span>
+    <button class="link-btn" id="change-loc" type="button">Change location</button>
+  </header>
+
+  <div id="banners"></div>
+
+  <!-- Location setup -->
+  <section class="card" id="setup" hidden>
+    <div class="eyebrow">Where's the lawn?</div>
+    <p class="muted" style="margin:6px 0 12px">Pick once — it's remembered on this phone.</p>
+    <button type="button" id="use-gps">Use my current location</button>
+    <form class="search" id="search-form">
+      <input id="q" type="search" placeholder="or type a town or ZIP" autocomplete="off" enterkeyhint="search" aria-label="Search for a town or ZIP code">
+      <button type="submit">Find</button>
+    </form>
+    <ul class="results" id="results"></ul>
+  </section>
+
+  <main id="app" hidden>
+    <!-- Hero: the one number the page leads with -->
+    <section class="card" id="hero">
+      <div class="eyebrow">Best time to mow</div>
+      <div class="hero-figure" id="best-day">—</div>
+      <div class="hero-when" id="best-window"></div>
+      <div class="hero-sub" id="best-why"></div>
+    </section>
+
+    <section class="card">
+      <div class="status-row">
+        <span class="dot" id="now-dot"></span>
+        <div>
+          <div><span class="status-word" id="now-word"></span> <span class="muted" id="now-time"></span></div>
+          <div class="muted" id="now-why"></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="eyebrow">This week</div>
+      <div class="legend" aria-hidden="true">
+        <span><i style="background:var(--go)"></i> Good</span>
+        <span><i style="background:var(--marginal)"></i> Marginal</span>
+        <span><i style="background:var(--no)"></i> Poor</span>
+        <span><i style="background:var(--blocked)"></i> Can't mow</span>
+      </div>
+      <div id="days"></div>
+      <p class="tiny" style="margin:12px 0 0">Tap a day for the hour-by-hour reasons.</p>
+    </section>
+
+    <section class="card">
+      <div class="eyebrow">How fast it's growing</div>
+      <div class="growth-val" id="growth-label">—</div>
+      <p class="muted" id="growth-note" style="margin:4px 0 0"></p>
+      <p class="tiny" id="growth-detail" style="margin:8px 0 0"></p>
+    </section>
+
+    <section class="card">
+      <div class="eyebrow">Grass type</div>
+      <p class="muted" style="margin:6px 0 10px">Changes how much heat counts against a cut.</p>
+      <div class="seg" role="group" aria-label="Grass type">
+        <button type="button" data-grass="cool" aria-pressed="false">Cool-season</button>
+        <button type="button" data-grass="warm" aria-pressed="false">Warm-season</button>
+      </div>
+      <p class="tiny" id="grass-examples" style="margin:8px 0 0"></p>
+    </section>
+
+    <details class="card">
+      <summary>Show every hour as a table</summary>
+      <div class="table-scroll">
+        <table id="table">
+          <thead><tr><th>When</th><th>Rating</th><th>Score</th><th>Temp</th><th>Rain</th><th>Wind</th><th>Notes</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </details>
+  </main>
+
+  <footer>
+    <p id="loc-line"></p>
+    <p>Weather from <a href="https://open-meteo.com" rel="noopener">Open-Meteo</a>. Ratings are an estimate from rain, dew, frost, heat and wind — look at the sky before you trust the page.</p>
+  </footer>
+</div>
+
+<script type="module">
+import { analyze, explainNow, fmtHour, fmtWindow, fmtDay, GRASS } from './mow.js';
+
+const $ = (s) => document.querySelector(s);
+const LS = { loc: 'mow.loc', grass: 'mow.grass' };
+const DAY_START = 6, DAY_END = 21; // strip covers 6am–9pm
+
+const params = new URLSearchParams(location.search);
+const DEMO = params.get('demo') === '1';
+
+let state = {
+  loc: readJSON(LS.loc),
+  grass: localStorage.getItem(LS.grass) || 'cool',
+  data: null,
+};
+
+function readJSON(k) { try { return JSON.parse(localStorage.getItem(k)); } catch { return null; } }
+function banner(msg, kind = 'warn') {
+  const el = document.createElement('div');
+  el.className = `banner ${kind}`;
+  el.textContent = msg;
+  $('#banners').append(el);
+}
+function clearBanners() { $('#banners').textContent = ''; }
+
+const FORECAST = 'https://api.open-meteo.com/v1/forecast';
+const GEOCODE = 'https://geocoding-api.open-meteo.com/v1/search';
+
+async function fetchForecast(lat, lon) {
+  const url = new URL(FORECAST);
+  url.search = new URLSearchParams({
+    latitude: lat,
+    longitude: lon,
+    hourly: 'temperature_2m,relative_humidity_2m,precipitation,precipitation_probability,wind_speed_10m,cloud_cover,is_day',
+    daily: 'sunrise,sunset,temperature_2m_max,temperature_2m_min,precipitation_sum',
+    temperature_unit: 'fahrenheit',
+    wind_speed_unit: 'mph',
+    precipitation_unit: 'inch',
+    timezone: 'auto',
+    past_days: '3',
+    forecast_days: '8',
+  });
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Weather service returned ${res.status}`);
+  return res.json();
+}
+
+async function geocode(q) {
+  const url = new URL(GEOCODE);
+  url.search = new URLSearchParams({ name: q, count: '5', language: 'en', format: 'json' });
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Search returned ${res.status}`);
+  const j = await res.json();
+  return j.results || [];
+}
+
+function showSetup(show) {
+  $('#setup').hidden = !show;
+  $('#app').hidden = show;
+}
+
+async function load() {
+  clearBanners();
+  if (DEMO) {
+    const { makeDemoData } = await import('./demo-data.js');
+    state.data = makeDemoData(Date.now());
+    banner('Demo mode — made-up weather for a sample week, not a real forecast.');
+    showSetup(false);
+    render();
+    return;
+  }
+  if (!state.loc) { showSetup(true); return; }
+
+  showSetup(false);
+  $('#best-day').textContent = 'Loading…';
+  try {
+    state.data = await fetchForecast(state.loc.lat, state.loc.lon);
+    render();
+  } catch (err) {
+    $('#best-day').textContent = '—';
+    banner(`Couldn't get the forecast: ${err.message}. Check the connection and pull to refresh.`, 'err');
+  }
+}
+
+function render() {
+  let a;
+  try {
+    a = analyze(state.data, state.grass);
+  } catch (err) {
+    banner(`Couldn't read the forecast: ${err.message}`, 'err');
+    return;
+  }
+
+  const todayStr = a.now ? a.now.day : a.days[0]?.day;
+  const tomorrow = a.days.find((d) => d.day > todayStr)?.day;
+  const dayLabel = (d) => fmtDay(d, todayStr, tomorrow);
+
+  // Hero
+  if (a.best) {
+    $('#best-day').textContent = dayLabel(a.best.day);
+    $('#best-window').textContent = fmtWindow(a.best);
+    const h = a.best.peak.start;
+    const sky = h.cloud < 40 ? 'mostly sunny' : h.cloud < 75 ? 'partly cloudy' : 'overcast';
+    const cond = `${Math.round(h.temp)}°, ${sky}, wind ${Math.round(h.wind)} mph, grass dry.`;
+    // A window wide enough that "anytime in there" isn't useful gets a sweet spot.
+    const sweet = a.best.hours.length > 4
+      ? `Best around ${fmtHour(a.best.peak.start.hour)}–${fmtHour(a.best.peak.end.hour + 1)}. `
+      : '';
+    $('#best-why').textContent = sweet + cond;
+  } else {
+    $('#best-day').textContent = 'No good window';
+    $('#best-window').textContent = '';
+    $('#best-why').textContent = 'Nothing in the next week clears the bar — too wet, too cold or too hot every daylight hour.';
+  }
+
+  // Right now
+  if (a.now) {
+    $('#now-dot').className = `dot ${a.now.bin.key}`;
+    $('#now-word').textContent = a.now.blockers.length ? "Don't mow now" : a.now.bin.label + ' right now';
+    $('#now-time').textContent = `· ${fmtHour(a.now.hour)}`;
+    $('#now-why').textContent = explainNow(a);
+  }
+
+  // Week
+  const days = $('#days');
+  days.textContent = '';
+  for (const d of a.days.slice(0, 7)) {
+    const wrap = document.createElement('div');
+    wrap.className = 'day';
+
+    const head = document.createElement('button');
+    head.type = 'button';
+    head.className = 'day-head';
+    head.setAttribute('aria-expanded', 'false');
+    const best = d.best ? fmtWindow(d.best) : 'nothing workable';
+    head.innerHTML = `<span class="day-name">${dayLabel(d.day)}</span>
+      <span class="day-best${d.best ? '' : ' none'}">${best}</span><span class="chev">▾</span>`;
+    head.addEventListener('click', () => {
+      const open = wrap.classList.toggle('open');
+      head.setAttribute('aria-expanded', String(open));
+    });
+    wrap.append(head);
+
+    // Hourly strip
+    const strip = document.createElement('div');
+    strip.className = 'strip';
+    strip.setAttribute('role', 'img');
+    strip.setAttribute('aria-label',
+      `${dayLabel(d.day)}: ${d.best ? `best window ${fmtWindow(d.best)}` : 'no workable window'}`);
+    for (let hr = DAY_START; hr <= DAY_END; hr++) {
+      const h = d.hours.find((x) => x.hour === hr);
+      const cell = document.createElement('div');
+      cell.className = 'cell' + (h ? ` ${h.bin.key}` : '');
+      if (h && a.now && h.time === a.now.time) cell.classList.add('now');
+      if (h) cell.title = `${fmtHour(hr)} — ${h.bin.label}${h.blockers.length ? ` (${h.blockers.join(', ')})` : ''}`;
+      strip.append(cell);
+    }
+    wrap.append(strip);
+
+    const ticks = document.createElement('div');
+    ticks.className = 'ticks';
+    ticks.innerHTML = `<span>6am</span><span>noon</span><span>9pm</span>`;
+    wrap.append(ticks);
+
+    // Expanded detail — doubles as the per-day table view
+    const hours = document.createElement('div');
+    hours.className = 'hours';
+    for (const h of d.hours.filter((x) => x.hour >= DAY_START && x.hour <= DAY_END)) {
+      const row = document.createElement('div');
+      row.className = 'hour-row';
+      row.innerHTML = `<span class="t">${fmtHour(h.hour)}</span>
+        <span class="dot ${h.bin.key}" style="margin-top:0"></span>
+        <span class="w">${describe(h)}</span>
+        <span class="s">${h.score}</span>`;
+      hours.append(row);
+    }
+    wrap.append(hours);
+    days.append(wrap);
+  }
+
+  // Growth
+  $('#growth-label').textContent = a.growth.label;
+  $('#growth-note').textContent = a.growth.note;
+  $('#growth-detail').textContent =
+    `${a.growth.gdd} growing degree days and ${a.growth.rain.toFixed(2)}" of rain across the window · typical gap ${a.growth.daysBetween} days`;
+
+  // Grass toggle
+  for (const b of document.querySelectorAll('[data-grass]')) {
+    b.setAttribute('aria-pressed', String(b.dataset.grass === state.grass));
+  }
+  $('#grass-examples').textContent = `${a.grass.label}: ${a.grass.examples}`;
+
+  // Full table
+  const tb = $('#table tbody');
+  tb.textContent = '';
+  for (const h of a.future.filter((x) => x.isDay).slice(0, 120)) {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${dayLabel(h.day)} ${fmtHour(h.hour)}</td><td>${h.bin.label}</td><td>${h.score}</td>
+      <td>${Math.round(h.temp)}°</td><td>${h.precip.toFixed(2)}"</td><td>${Math.round(h.wind)}</td>
+      <td>${h.blockers.join(', ') || '—'}</td>`;
+    tb.append(tr);
+  }
+
+  $('#loc-line').textContent = state.loc
+    ? `${state.loc.name} · times shown in ${a.timezone || 'local time'}`
+    : (DEMO ? 'Demo location' : '');
+}
+
+function describe(h) {
+  if (h.blockers.length) {
+    const map = { dark: 'dark', raining: 'raining', frost: 'frost on the grass', 'wet grass': 'grass still wet' };
+    return h.blockers.map((b) => map[b] || b).join(', ');
+  }
+  const bits = [`${Math.round(h.temp)}°`];
+  if (h.wind >= 12) bits.push(`wind ${Math.round(h.wind)}`);
+  if (h.precipProb >= 40) bits.push(`${h.precipProb}% rain`);
+  if (h.wet > 0.2) bits.push('slightly damp');
+  return bits.join(' · ');
+}
+
+// --- Location handling ---
+
+$('#change-loc').addEventListener('click', () => {
+  showSetup(true);
+  $('#q').focus();
+});
+
+$('#use-gps').addEventListener('click', () => {
+  if (!navigator.geolocation) { banner('This browser has no location support — type a town instead.'); return; }
+  $('#use-gps').textContent = 'Locating…';
+  navigator.geolocation.getCurrentPosition(
+    (pos) => {
+      setLoc({ lat: +pos.coords.latitude.toFixed(4), lon: +pos.coords.longitude.toFixed(4), name: 'My location' });
+      $('#use-gps').textContent = 'Use my current location';
+    },
+    (err) => {
+      $('#use-gps').textContent = 'Use my current location';
+      banner(`Couldn't get your location (${err.message}). Type a town or ZIP instead.`);
+    },
+    { enableHighAccuracy: false, timeout: 10000, maximumAge: 600000 }
+  );
+});
+
+$('#search-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const q = $('#q').value.trim();
+  if (!q) return;
+  clearBanners();
+  const list = $('#results');
+  list.innerHTML = '<li style="padding:12px 2px;color:var(--text-muted)">Searching…</li>';
+  try {
+    const hits = await geocode(q);
+    list.textContent = '';
+    if (!hits.length) { list.innerHTML = '<li style="padding:12px 2px;color:var(--text-muted)">Nothing found. Try a nearby town.</li>'; return; }
+    for (const r of hits) {
+      const li = document.createElement('li');
+      const b = document.createElement('button');
+      b.type = 'button';
+      const where = [r.admin1, r.country].filter(Boolean).join(', ');
+      b.innerHTML = `<strong>${r.name}</strong><br><span class="tiny">${where}</span>`;
+      b.addEventListener('click', () => setLoc({ lat: r.latitude, lon: r.longitude, name: `${r.name}${r.admin1 ? ', ' + r.admin1 : ''}` }));
+      li.append(b);
+      list.append(li);
+    }
+  } catch (err) {
+    list.textContent = '';
+    banner(`Search failed: ${err.message}`, 'err');
+  }
+});
+
+function setLoc(loc) {
+  state.loc = loc;
+  localStorage.setItem(LS.loc, JSON.stringify(loc));
+  $('#results').textContent = '';
+  $('#q').value = '';
+  load();
+}
+
+for (const b of document.querySelectorAll('[data-grass]')) {
+  b.addEventListener('click', () => {
+    state.grass = b.dataset.grass;
+    localStorage.setItem(LS.grass, state.grass);
+    if (state.data) render();
+  });
+}
+
+load();
+</script>
+</body>
+</html>
