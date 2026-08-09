@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 180 180" width="180" height="180" role="img" aria-label="A push mower on grass">
+  <!-- Full-bleed ground: iOS applies its own rounded mask over this. -->
+  <rect width="180" height="180" fill="#2d7a34"/>
+
+  <!-- Turf as one solid band with an uneven top edge — individual blades turn
+       to noise once the icon is 60px on a home screen. -->
+  <path fill="#22602a" d="M0 152c14-10 24 2 38-4s22-8 34-2 20 8 32 4 24-12 38-6 24 8 38 2v34H0z"/>
+
+  <g fill="#f7f8f2">
+    <!-- Handle and grip meet at a single point so they read as one part. -->
+    <path d="M112 96 L148 50" stroke="#f7f8f2" stroke-width="12" stroke-linecap="round" fill="none"/>
+    <path d="M132 50 L164 50" stroke="#f7f8f2" stroke-width="12" stroke-linecap="round" fill="none"/>
+
+    <!-- Engine block on the cutting deck. -->
+    <rect x="54" y="62" width="44" height="28" rx="6"/>
+    <rect x="26" y="88" width="94" height="34" rx="10"/>
+  </g>
+
+  <!-- Wheels: dark centres so they read as wheels rather than blobs. -->
+  <g>
+    <circle cx="46" cy="126" r="18" fill="#f7f8f2"/>
+    <circle cx="46" cy="126" r="7.5" fill="#2d7a34"/>
+    <circle cx="106" cy="126" r="18" fill="#f7f8f2"/>
+    <circle cx="106" cy="126" r="7.5" fill="#2d7a34"/>
+  </g>
+</svg>

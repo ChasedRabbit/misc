@@ -6,6 +6,20 @@
 <meta name="color-scheme" content="light dark">
 <title>Mow Window — when to cut the grass this week</title>
 <meta name="description" content="Finds the best hours this week to mow, using rain, dew, frost and heat.">
+
+<!-- Home-screen icon. iOS ignores SVG here and needs a real PNG, otherwise it
+     falls back to a screenshot or the first letter of the title. -->
+<link rel="apple-touch-icon" href="./apple-touch-icon.png">
+<link rel="icon" type="image/svg+xml" href="./icon.svg">
+<link rel="icon" type="image/png" sizes="192x192" href="./icon-192.png">
+<link rel="manifest" href="./manifest.webmanifest">
+
+<!-- Opens without browser chrome once it's on the home screen. -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="Mow Window">
+<meta name="theme-color" content="#2d7a34">
 <style>
   :root {
     color-scheme: light;
