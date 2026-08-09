@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   analyze, scoreHour, saturationSeries, saturationFromMeasured, pickMoistureLayer,
-  classifySoil, heatIndex, findRuns, findStretches, cureRisk, SOIL,
+  classifySoil, fieldCapacity, heatIndex, findRuns, findStretches, cureRisk, SOIL,
 } from '../wall/wall.js';
 import { makeDemoData } from '../demo-data.js';
 
@@ -231,6 +231,76 @@ test('snow on the ground stops work', () => {
   assert.ok(a.hours.every((h) => h.blockers.length > 0));
   assert.ok(a.hours.some((h) => h.blockers.includes('snow on the ground')));
   assert.equal(a.best, null);
+});
+
+test('field capacity reproduces textbook values for known textures', () => {
+  // Published field capacities: sand ~0.10, loam ~0.27, clay ~0.39.
+  const sand = fieldCapacity({ sand: 90, clay: 5, organicMatter: 1 });
+  const loam = fieldCapacity({ sand: 40, clay: 20, organicMatter: 2.5 });
+  const clay = fieldCapacity({ sand: 20, clay: 55, organicMatter: 3 });
+
+  assert.ok(sand > 0.05 && sand < 0.14, `sand field capacity out of range: ${sand}`);
+  assert.ok(loam > 0.23 && loam < 0.31, `loam field capacity out of range: ${loam}`);
+  assert.ok(clay > 0.35 && clay < 0.47, `clay field capacity out of range: ${clay}`);
+  assert.ok(sand < loam && loam < clay, 'should order sand < loam < clay');
+});
+
+test('field capacity rises with clay and falls with sand', () => {
+  let prev = 0;
+  for (const clay of [5, 15, 25, 35, 45, 55]) {
+    const fc = fieldCapacity({ clay, sand: 30, organicMatter: 2 });
+    assert.ok(fc > prev, `field capacity should rise with clay (${clay}%: ${fc})`);
+    prev = fc;
+  }
+  let last = 1;
+  for (const sand of [10, 30, 50, 70, 85]) {
+    const fc = fieldCapacity({ clay: 10, sand, organicMatter: 2 });
+    assert.ok(fc < last, `field capacity should fall with sand (${sand}%: ${fc})`);
+    last = fc;
+  }
+});
+
+test('organic matter increases water holding', () => {
+  const lean = fieldCapacity({ clay: 20, sand: 40, organicMatter: 0.5 });
+  const rich = fieldCapacity({ clay: 20, sand: 40, organicMatter: 6 });
+  assert.ok(rich > lean, `organic matter should raise field capacity (${lean} -> ${rich})`);
+});
+
+test('field capacity rejects impossible inputs instead of inventing a number', () => {
+  assert.equal(fieldCapacity({ clay: null, sand: 40 }), null);
+  assert.equal(fieldCapacity({ clay: 60, sand: 70 }), null, 'clay + sand over 100%');
+  assert.equal(fieldCapacity({ clay: -5, sand: 40 }), null);
+  assert.equal(fieldCapacity({ clay: 120, sand: 10 }), null);
+  assert.equal(fieldCapacity({}), null);
+});
+
+test('two soils that both classify as clay get different thresholds', () => {
+  const modest = fieldCapacity({ clay: 36, sand: 30, organicMatter: 2 });
+  const heavy = fieldCapacity({ clay: 58, sand: 12, organicMatter: 4 });
+  assert.equal(classifySoil({ clay: 36, sand: 30 }), 'clay');
+  assert.equal(classifySoil({ clay: 58, sand: 12 }), 'clay');
+  assert.ok(heavy - modest > 0.03, `should differ meaningfully, got ${modest} vs ${heavy}`);
+});
+
+test('analyze uses measured soil properties when given them', () => {
+  const data = makeDemoData(NOW);
+  const bucket = analyze(data, 'clay', NOW);
+  const measured = analyze(data, 'clay', NOW, { clay: 58, sand: 12, organicMatter: 4 });
+
+  assert.equal(bucket.soilBasis.source, 'typical');
+  assert.equal(bucket.soil.vwcWork, SOIL.clay.vwcWork);
+  assert.equal(measured.soilBasis.source, 'measured');
+  assert.ok(measured.soil.vwcWork > SOIL.clay.vwcWork, 'heavy clay should tolerate more water');
+
+  // A higher threshold means more hours clear it.
+  const count = (a) => a.days.reduce((n, d) => n + d.workableHours, 0);
+  assert.ok(count(measured) >= count(bucket));
+});
+
+test('analyze ignores unusable measured properties and falls back to the bucket', () => {
+  const a = analyze(makeDemoData(NOW), 'loam', NOW, { clay: 80, sand: 80 });
+  assert.equal(a.soilBasis.source, 'typical');
+  assert.equal(a.soil.vwcWork, SOIL.loam.vwcWork);
 });
 
 test('soil classification follows the texture triangle', () => {

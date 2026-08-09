@@ -337,9 +337,12 @@ async function detectSoil(lat, lon) {
   const url = new URL(SOILGRIDS);
   url.searchParams.set('lat', lat);
   url.searchParams.set('lon', lon);
-  url.searchParams.set('depth', '5-15cm');
+  // A wall base sits well below the topsoil, and the B horizon is usually
+  // more clay-rich than the surface, so sample the depths actually dug.
+  for (const depth of ['15-30cm', '30-60cm']) url.searchParams.append('depth', depth);
   url.searchParams.set('value', 'mean');
-  for (const prop of ['clay', 'sand', 'silt']) url.searchParams.append('property', prop);
+  // Organic carbon feeds the field-capacity calculation alongside texture.
+  for (const prop of ['clay', 'sand', 'soc']) url.searchParams.append('property', prop);
 
   // Don't let a slow lookup hold up anything the reader is waiting on.
   const ctrl = new AbortController();
@@ -351,12 +354,16 @@ async function detectSoil(lat, lon) {
     const layers = j?.properties?.layers;
     if (!Array.isArray(layers)) return null;
 
+    // Mean across the sampled depths, in SoilGrids' conventional units.
     const read = (name) => {
       const L = layers.find((l) => l.name === name);
-      const v = L?.depths?.[0]?.values?.mean;
-      // SoilGrids reports g/kg with a documented divisor to reach percent.
       const factor = L?.unit_measure?.d_factor ?? 10;
-      return Number.isFinite(v) ? v / factor : null;
+      const vals = (L?.depths || [])
+        .map((d) => d?.values?.mean)
+        .filter((v) => Number.isFinite(v))
+        .map((v) => v / factor);
+      if (!vals.length) return null;
+      return vals.reduce((a, b) => a + b, 0) / vals.length;
     };
 
     const clay = read('clay');
@@ -364,7 +371,19 @@ async function detectSoil(lat, lon) {
     const key = classifySoil({ clay, sand });
     if (!key) return null;
 
-    const out = { key, clay: Math.round(clay), sand: Math.round(sand) };
+    // soc comes back as g/kg: organic carbon percent is a tenth of that, and
+    // organic matter is conventionally carbon x 1.724.
+    const socGPerKg = read('soc');
+    const organicMatter = Number.isFinite(socGPerKg)
+      ? Math.round((socGPerKg / 10) * 1.724 * 10) / 10
+      : null;
+
+    const out = {
+      key,
+      clay: Math.round(clay),
+      sand: Math.round(sand),
+      organicMatter,
+    };
     localStorage.setItem(cacheKey, JSON.stringify(out));
     return out;
   } catch {
@@ -425,7 +444,17 @@ async function load() {
 function render() {
   let a;
   try {
-    a = analyze(state.data, state.soil);
+    // Compute the threshold from this spot's own texture, unless he has
+    // overridden the soil type — in which case he's telling us the survey
+    // doesn't describe his yard, so fall back to the typical figures.
+    const site = state.detected && !state.soilManual
+      ? {
+          clay: state.detected.clay,
+          sand: state.detected.sand,
+          organicMatter: state.detected.organicMatter ?? undefined,
+        }
+      : null;
+    a = analyze(state.data, state.soil, Date.now(), site);
   } catch (err) {
     banner(`Couldn't read the forecast: ${err.message}`, 'err');
     return;
@@ -559,8 +588,12 @@ function render() {
   }
   const d = state.detected;
   if (d && !state.soilManual) {
+    const om = d.organicMatter != null ? `, ${d.organicMatter}% organic matter` : '';
+    const basis = a.soilBasis.source === 'measured'
+      ? ` Holds water to ${a.soilBasis.vwcWork.toFixed(2)} before compaction stops working, calculated from those figures rather than a typical value.`
+      : '';
     $('#soil-examples').textContent =
-      `Soil survey for this spot: ${d.clay}% clay, ${d.sand}% sand — treated as ${SOIL[d.key].label.toLowerCase()}. Tap to change it if you know better.`;
+      `Soil survey at 15–60cm here: ${d.clay}% clay, ${d.sand}% sand${om}.${basis} Tap to override if you know better.`;
   } else if (d && state.soilManual && d.key !== state.soil) {
     $('#soil-examples').textContent =
       `${a.soil.label}: ${a.soil.examples}. (The soil survey says ${SOIL[d.key].label.toLowerCase()} here.)`;

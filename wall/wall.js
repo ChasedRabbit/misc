@@ -56,6 +56,37 @@ export const MOISTURE_LAYERS = [
 ];
 
 /**
+ * Field capacity (water content at -33 kPa) from measured texture and organic
+ * matter, after Saxton & Rawls (2006). This replaces the three bucket
+ * constants above with a continuous, site-specific number wherever the soil
+ * survey answers — a 36%-clay soil and a 55%-clay soil stop being the same
+ * "clay", and organic matter finally counts for something.
+ *
+ * @param clay  percent by weight
+ * @param sand  percent by weight
+ * @param organicMatter percent (roughly organic carbon x 1.724)
+ * @returns m3/m3, or null if the inputs aren't usable
+ */
+export function fieldCapacity({ clay, sand, organicMatter = 2 }) {
+  if (!Number.isFinite(clay) || !Number.isFinite(sand)) return null;
+  if (clay < 0 || sand < 0 || clay > 100 || sand > 100 || clay + sand > 100.5) return null;
+
+  const C = clay / 100;
+  const S = sand / 100;
+  const OM = clamp(Number.isFinite(organicMatter) ? organicMatter : 2, 0, 8);
+
+  const t =
+    -0.251 * S + 0.195 * C + 0.011 * OM +
+    0.006 * (S * OM) - 0.027 * (C * OM) +
+    0.452 * (S * C) + 0.299;
+  const theta33 = t + (1.283 * t * t - 0.374 * t - 0.015);
+
+  // Guard against the regression wandering outside physically sensible ground.
+  if (!Number.isFinite(theta33)) return null;
+  return clamp(theta33, 0.05, 0.55);
+}
+
+/**
  * Simplified USDA texture triangle — enough to choose between the three
  * settings this tool offers. Percentages by weight.
  */
@@ -281,8 +312,20 @@ export function cureRisk(day, hoursAfter) {
   return { risks, rain, minTemp: minTemp === Infinity ? null : minTemp };
 }
 
-export function analyze(data, soilKey = 'loam', nowMs = Date.now()) {
-  const soil = SOIL[soilKey] || SOIL.loam;
+/**
+ * @param site optional measured soil properties for this exact spot
+ *             ({ clay, sand, organicMatter } as percentages). When supplied,
+ *             the workable water content is computed from them instead of
+ *             taken from the three-bucket table.
+ */
+export function analyze(data, soilKey = 'loam', nowMs = Date.now(), site = null) {
+  const bucket = SOIL[soilKey] || SOIL.loam;
+
+  const measuredFc = site ? fieldCapacity(site) : null;
+  const soil = measuredFc ? { ...bucket, vwcWork: measuredFc } : bucket;
+  const soilBasis = measuredFc
+    ? { source: 'measured', vwcWork: measuredFc, clay: site.clay, sand: site.sand, organicMatter: site.organicMatter }
+    : { source: 'typical', vwcWork: bucket.vwcWork };
   const H = data.hourly || {};
   const time = H.time || [];
   const n = time.length;
@@ -407,6 +450,7 @@ export function analyze(data, soilKey = 'loam', nowMs = Date.now()) {
     workableAt,
     dryAt: hours.slice(nowIdx).find((h) => h.saturation <= soil.workLimit) || null,
     soil,
+    soilBasis,
     hasSoilTemp,
     moisture,
     timezone: data.timezone,
