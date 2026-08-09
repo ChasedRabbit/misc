@@ -145,7 +145,10 @@ export function scoreHour(h, grass) {
   // Late afternoon leaves the plant time to recover before the next hot day.
   if (h.hour >= 16 && h.hour <= 19) s += 6;
 
-  return { score: Math.round(clamp(s, 0, 100)), blockers };
+  // Floor at 1. Zero is reserved for blocked hours, which always carry a
+  // reason — otherwise punishing-but-possible conditions (a 110° afternoon)
+  // would read as "can't mow" with nothing to explain it.
+  return { score: Math.max(1, Math.round(clamp(s, 0, 100))), blockers };
 }
 
 /**
@@ -202,8 +205,36 @@ export function findWindows(hours, { decayPerDay = 1.5 } = {}) {
  * How fast the grass is actually growing — i.e. whether he needs to mow at all.
  * Growing degree days over the coming week, damped when there's no moisture.
  */
+/**
+ * Daily highs, lows and rainfall rebuilt from the hourly series, for when the
+ * response has no daily block. Losing the growth estimate entirely would be a
+ * worse answer than deriving it.
+ */
+export function dailyFromHourly(hours) {
+  const byDay = new Map();
+  for (const h of hours) {
+    let e = byDay.get(h.day);
+    if (!e) byDay.set(h.day, (e = { max: -Infinity, min: Infinity, sum: 0 }));
+    if (h.temp > e.max) e.max = h.temp;
+    if (h.temp < e.min) e.min = h.temp;
+    e.sum += h.precip;
+  }
+  const out = { time: [], temperature_2m_max: [], temperature_2m_min: [], precipitation_sum: [] };
+  for (const [day, e] of byDay) {
+    out.time.push(day);
+    out.temperature_2m_max.push(e.max);
+    out.temperature_2m_min.push(e.min);
+    out.precipitation_sum.push(Math.round(e.sum * 100) / 100);
+  }
+  return out;
+}
+
 export function growthOutlook(daily, grass) {
-  const n = daily.time.length;
+  const times = (daily && daily.time) || [];
+  const n = times.length;
+  if (!n) {
+    return { label: 'Unknown', daysBetween: 7, note: 'No daily summary available, so growth cannot be estimated.', gdd: 0, rain: 0, index: 0 };
+  }
   const tmax = col(daily, 'temperature_2m_max', n, 70);
   const tmin = col(daily, 'temperature_2m_min', n, 50);
   const rain = col(daily, 'precipitation_sum', n, 0);
@@ -339,7 +370,8 @@ export function analyze(data, grassKey = 'cool', nowMs = Date.now()) {
     return { day, hours: hs, best: dayWindows[0] || null, peak: Math.max(0, ...hs.map((h) => h.score)) };
   });
 
-  const daily = { ...D, pastDays: (D.time || []).findIndex((d) => d === dayOf(nowKey)) };
+  const dailyBase = Array.isArray(D.time) && D.time.length ? D : dailyFromHourly(hours);
+  const daily = { ...dailyBase, pastDays: (dailyBase.time || []).findIndex((d) => d === dayOf(nowKey)) };
   if (daily.pastDays < 0) daily.pastDays = 0;
 
   return {

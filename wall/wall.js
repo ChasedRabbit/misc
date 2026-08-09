@@ -147,7 +147,10 @@ export function scoreHour(h, soil) {
   // Not enough daylight left to reach a sensible stopping point.
   if (h.hoursLeftInDay < 2) s -= 12;
 
-  return { score: Math.round(clamp(s, 0, 100)), blockers };
+  // Floor at 1. Zero is reserved for blocked hours, which always carry a
+  // reason — otherwise grim-but-possible conditions would read as "can't
+  // work" with nothing to explain it.
+  return { score: Math.max(1, Math.round(clamp(s, 0, 100))), blockers };
 }
 
 /** Contiguous runs of workable hours within one day. */
