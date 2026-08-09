@@ -34,6 +34,11 @@ export function makeDemoData(nowMs = Date.now(), opts = {}) {
   // Ground temperature lags and damps the air temperature. The mowing tool
   // ignores this column; the retaining-wall tool uses it for frozen ground.
   const soil_temperature_0cm = [];
+  // Land-surface fields the wall tool prefers over its own estimates.
+  const soil_moisture_9_to_27cm = [];
+  const et0_fao_evapotranspiration = [];
+  const snow_depth = [];
+  let vwc = opts.startVwc ?? 0.24; // m³/m³, a normally-moist loam
 
   const daily = {
     time: [],
@@ -91,6 +96,21 @@ export function makeDemoData(nowMs = Date.now(), opts = {}) {
       // Damped toward the day's mean and shifted a few hours later.
       const dayMean = (baseHigh + baseLow) / 2;
       soil_temperature_0cm.push(Math.round((dayMean + (t - dayMean) * 0.45) * 10) / 10);
+
+      // Reference evapotranspiration, inches per hour: nothing at night,
+      // peaking mid-afternoon and suppressed under cloud.
+      const et = h >= SUNRISE && h < SUNSET
+        ? Math.max(0, Math.sin(((h - SUNRISE) / (SUNSET - SUNRISE)) * Math.PI)) * 0.016 * (1 - cloud / 160)
+        : 0;
+      et0_fao_evapotranspiration.push(Math.round(et * 1000) / 1000);
+
+      // Soil water balance: rain in, evapotranspiration and drainage out.
+      vwc += p * 0.55;
+      vwc -= et * 0.5 + 0.0009;
+      vwc = clamp(vwc, 0.06, 0.46);
+      soil_moisture_9_to_27cm.push(Math.round(vwc * 1000) / 1000);
+
+      snow_depth.push(0);
     }
 
     daily.time.push(key);
@@ -117,6 +137,9 @@ export function makeDemoData(nowMs = Date.now(), opts = {}) {
       cloud_cover,
       is_day,
       soil_temperature_0cm,
+      soil_moisture_9_to_27cm,
+      et0_fao_evapotranspiration,
+      snow_depth,
     },
     daily,
   };

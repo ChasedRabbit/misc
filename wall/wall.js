@@ -14,6 +14,10 @@
 // The formatters are duplicated from mow.js rather than shared, so this tool
 // stays independently deployable and the working mow page is never touched.
 
+// vwcWork is the volumetric water content (m³/m³) above which the soil is too
+// wet to compact properly — roughly field capacity, where the soil passes its
+// plastic limit and a roller or plate just kneads it instead of densifying it.
+// Clay holds far more water before it gets there than sand does.
 export const SOIL = {
   clay: {
     key: 'clay',
@@ -21,6 +25,7 @@ export const SOIL = {
     examples: 'heavy and sticky, puddles sit on top',
     drainRate: 0.6,
     workLimit: 0.50,
+    vwcWork: 0.34,
   },
   loam: {
     key: 'loam',
@@ -28,6 +33,7 @@ export const SOIL = {
     examples: 'ordinary garden soil, the usual case',
     drainRate: 1.0,
     workLimit: 0.55,
+    vwcWork: 0.28,
   },
   sand: {
     key: 'sand',
@@ -35,8 +41,30 @@ export const SOIL = {
     examples: 'gritty, water disappears fast',
     drainRate: 1.7,
     workLimit: 0.62,
+    vwcWork: 0.16,
   },
 };
+
+// Deepest first: 9–27cm is about base-course depth, which is the layer that
+// decides whether compaction will hold. The shallower layers are fallbacks for
+// models that don't publish the deeper ones.
+export const MOISTURE_LAYERS = [
+  { key: 'soil_moisture_9_to_27cm', label: '9–27cm' },
+  { key: 'soil_moisture_3_to_9cm', label: '3–9cm' },
+  { key: 'soil_moisture_1_to_3cm', label: '1–3cm' },
+  { key: 'soil_moisture_0_to_1cm', label: '0–1cm' },
+];
+
+/**
+ * Simplified USDA texture triangle — enough to choose between the three
+ * settings this tool offers. Percentages by weight.
+ */
+export function classifySoil({ clay, sand }) {
+  if (!Number.isFinite(clay) || !Number.isFinite(sand)) return null;
+  if (clay >= 35) return 'clay';
+  if (sand >= 70 && clay < 20) return 'sand';
+  return 'loam';
+}
 
 // Working day runs 7am–7pm; nobody is setting block by phone light.
 const WORK_START = 7;
@@ -96,29 +124,63 @@ export function heatIndex(tempF, rh) {
  * Rain soaks in; sun, wind, warmth and dry air pull it back out, scaled by how
  * freely the soil drains. Frozen ground barely drains at all.
  */
-export function saturationSeries({ precip, rh, cloud, wind, temp, isDay }, soil, start = 0.35) {
+export function saturationSeries({ precip, rh, cloud, wind, temp, isDay, et0 }, soil, start = 0.35) {
   const out = new Array(precip.length);
+  const hasEt0 = Array.isArray(et0) && et0.some((v) => Number.isFinite(v) && v > 0);
   let s = start;
   for (let i = 0; i < precip.length; i++) {
     s += precip[i] * 1.1; // half an inch of rain ≈ +0.55
 
-    const sun = isDay[i] ? 1 - 0.6 * (cloud[i] / 100) : 0.15;
-    const windF = clamp(0.5 + wind[i] / 22, 0.35, 1.6);
-    const humF = clamp((95 - rh[i]) / 45, 0.1, 1.5);
-    const tempF = clamp((temp[i] - 25) / 50, 0.15, 1.5);
     const frozen = temp[i] <= 32 ? 0.05 : 1;
+    let dry;
+    if (hasEt0) {
+      // Reference evapotranspiration is the physically-derived drying rate, so
+      // prefer it over inferring one from sun, wind and humidity. The constant
+      // stands in for gravity drainage, which continues after dark.
+      dry = (Math.max(0, et0[i]) * 1.1 + 0.003) * soil.drainRate;
+    } else {
+      const sun = isDay[i] ? 1 - 0.6 * (cloud[i] / 100) : 0.15;
+      const windF = clamp(0.5 + wind[i] / 22, 0.35, 1.6);
+      const humF = clamp((95 - rh[i]) / 45, 0.1, 1.5);
+      const tempF = clamp((temp[i] - 25) / 50, 0.15, 1.5);
+      dry = 0.03 * soil.drainRate * sun * windF * humF * tempF;
+    }
 
-    s -= 0.03 * soil.drainRate * sun * windF * humF * tempF * frozen;
+    s -= dry * frozen;
     s = clamp(s, 0, 1.6);
     out[i] = s;
   }
   return out;
 }
 
+/**
+ * Map measured volumetric water content onto the same scale the estimator
+ * produces, so everything downstream is unchanged: at exactly the soil's
+ * workable limit the result equals soil.workLimit.
+ */
+export function saturationFromMeasured(vwc, soil) {
+  return vwc.map((v) =>
+    Number.isFinite(v) ? clamp((v / soil.vwcWork) * soil.workLimit, 0, 1.6) : soil.workLimit
+  );
+}
+
+/** First moisture layer the response actually carries usable numbers for. */
+export function pickMoistureLayer(hourly, n) {
+  for (const layer of MOISTURE_LAYERS) {
+    const a = hourly[layer.key];
+    if (!Array.isArray(a) || a.length !== n) continue;
+    const usable = a.filter((v) => Number.isFinite(v) && v > 0);
+    // A column of nulls or flat zeros means the model didn't run it here.
+    if (usable.length >= n * 0.5) return layer;
+  }
+  return null;
+}
+
 export function scoreHour(h, soil) {
   const blockers = [];
   if (!h.isDay || h.hour < WORK_START || h.hour >= WORK_END) blockers.push('outside working hours');
   if (h.precip > 0.01) blockers.push('raining');
+  if (h.snow) blockers.push('snow on the ground');
   if (h.groundFrozen) blockers.push('frozen ground');
   if (h.saturation > soil.workLimit) blockers.push('ground too wet');
   if (h.heatIndex >= 103) blockers.push('dangerous heat');
@@ -237,11 +299,23 @@ export function analyze(data, soilKey = 'loam', nowMs = Date.now()) {
   // poor stand-in but better than pretending the ground can't freeze.
   const hasSoilTemp = Array.isArray(H.soil_temperature_0cm) && H.soil_temperature_0cm.length === n;
   const soilTemp = col(H, 'soil_temperature_0cm', n, null);
+  const snowDepth = col(H, 'snow_depth', n, 0);
+  const et0 = Array.isArray(H.et0_fao_evapotranspiration) ? col(H, 'et0_fao_evapotranspiration', n, 0) : null;
 
-  const sat = saturationSeries(
-    { precip, rh, cloud, wind, temp, isDay: isDayRaw.map(Boolean) },
-    soil
-  );
+  // Prefer the land-surface model's own soil moisture over inferring it from
+  // rainfall. Fall back to the estimator when the model doesn't publish it.
+  const layer = pickMoistureLayer(H, n);
+  const sat = layer
+    ? saturationFromMeasured(col(H, layer.key, n, null), soil)
+    : saturationSeries(
+        { precip, rh, cloud, wind, temp, isDay: isDayRaw.map(Boolean), et0 },
+        soil
+      );
+  const moisture = {
+    source: layer ? 'measured' : 'estimated',
+    layer: layer ? layer.label : null,
+    usedEt0: !layer && Array.isArray(et0) && et0.some((v) => v > 0),
+  };
 
   const nowKey = localNowKey(data.utc_offset_seconds, nowMs);
   let nowIdx = time.indexOf(nowKey);
@@ -268,6 +342,8 @@ export function analyze(data, soilKey = 'loam', nowMs = Date.now()) {
       isDay: Boolean(isDayRaw[i]),
       saturation: sat[i],
       heatIndex: heatIndex(temp[i], rh[i]),
+      // snow_depth is metres; a couple of centimetres is enough to stop work.
+      snow: snowDepth[i] > 0.02,
       groundFrozen: hasSoilTemp ? soilTemp[i] <= 32 : temp[i] <= 30,
       rainInNext3h: rainSoon(3),
       hoursLeftInDay: WORK_END - hr,
@@ -332,6 +408,7 @@ export function analyze(data, soilKey = 'loam', nowMs = Date.now()) {
     dryAt: hours.slice(nowIdx).find((h) => h.saturation <= soil.workLimit) || null,
     soil,
     hasSoilTemp,
+    moisture,
     timezone: data.timezone,
   };
 }

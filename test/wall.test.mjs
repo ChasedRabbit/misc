@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  analyze, scoreHour, saturationSeries, heatIndex, findRuns, findStretches, cureRisk, SOIL,
+  analyze, scoreHour, saturationSeries, saturationFromMeasured, pickMoistureLayer,
+  classifySoil, heatIndex, findRuns, findStretches, cureRisk, SOIL,
 } from '../wall/wall.js';
 import { makeDemoData } from '../demo-data.js';
 
@@ -161,6 +162,85 @@ test('a week of rain reports no workable stretch rather than inventing one', () 
   assert.equal(a.stretches.length, 0);
   assert.equal(a.best, null);
   assert.ok(a.days.every((d) => d.workableHours === 0));
+});
+
+test('measured soil moisture maps onto the same scale as the estimate', () => {
+  for (const soil of [SOIL.clay, SOIL.loam, SOIL.sand]) {
+    // At exactly the soil's workable limit, the scale must read workLimit.
+    const [atLimit] = saturationFromMeasured([soil.vwcWork], soil);
+    assert.ok(Math.abs(atLimit - soil.workLimit) < 1e-9, `${soil.key}: ${atLimit} vs ${soil.workLimit}`);
+    // Drier reads workable, wetter reads blocked.
+    assert.ok(saturationFromMeasured([soil.vwcWork * 0.5], soil)[0] < soil.workLimit);
+    assert.ok(saturationFromMeasured([soil.vwcWork * 1.4], soil)[0] > soil.workLimit);
+  }
+});
+
+test('the same wetness is workable on sand and not on clay', () => {
+  // 0.30 m³/m³ is past what clay can take but nowhere near sand's limit.
+  assert.ok(saturationFromMeasured([0.30], SOIL.sand)[0] > SOIL.sand.workLimit);
+  assert.ok(saturationFromMeasured([0.30], SOIL.clay)[0] < SOIL.clay.workLimit);
+});
+
+test('the deepest usable moisture layer is chosen, and junk columns are skipped', () => {
+  const n = 10;
+  const full = (v) => new Array(n).fill(v);
+  assert.equal(pickMoistureLayer({ soil_moisture_9_to_27cm: full(0.2), soil_moisture_3_to_9cm: full(0.2) }, n).label, '9–27cm');
+  // A model that publishes only the shallow layer.
+  assert.equal(pickMoistureLayer({ soil_moisture_3_to_9cm: full(0.2) }, n).label, '3–9cm');
+  // Nulls and flat zeros mean the model didn't run it here.
+  assert.equal(pickMoistureLayer({ soil_moisture_9_to_27cm: full(null) }, n), null);
+  assert.equal(pickMoistureLayer({ soil_moisture_9_to_27cm: full(0) }, n), null);
+  assert.equal(pickMoistureLayer({}, n), null);
+  // Wrong length is not trusted.
+  assert.equal(pickMoistureLayer({ soil_moisture_9_to_27cm: [0.2, 0.2] }, n), null);
+});
+
+test('analyze prefers measured soil moisture and reports that it did', () => {
+  const a = analyze(makeDemoData(NOW), 'loam', NOW);
+  assert.equal(a.moisture.source, 'measured');
+  assert.equal(a.moisture.layer, '9–27cm');
+});
+
+test('analyze falls back to the estimate when no moisture layer is published', () => {
+  const data = makeDemoData(NOW);
+  delete data.hourly.soil_moisture_9_to_27cm;
+  const a = analyze(data, 'loam', NOW);
+  assert.equal(a.moisture.source, 'estimated');
+  assert.equal(a.moisture.usedEt0, true, 'should still use reference evapotranspiration');
+  assert.ok(a.days.length > 0);
+});
+
+test('evapotranspiration dries the ground faster than a still, humid day', () => {
+  const n = 48;
+  const mk = (et) => saturationSeries({
+    precip: [0.4, ...new Array(n - 1).fill(0)],
+    rh: new Array(n).fill(60),
+    cloud: new Array(n).fill(40),
+    wind: new Array(n).fill(8),
+    temp: new Array(n).fill(70),
+    isDay: new Array(n).fill(true),
+    et0: new Array(n).fill(et),
+  }, SOIL.loam).at(-1);
+  assert.ok(mk(0.02) < mk(0.002), 'higher ET0 should dry the ground faster');
+});
+
+test('snow on the ground stops work', () => {
+  const data = makeDemoData(NOW);
+  data.hourly.snow_depth = data.hourly.snow_depth.map(() => 0.15); // 15cm
+  const a = analyze(data, 'loam', NOW);
+  assert.ok(a.hours.every((h) => h.blockers.length > 0));
+  assert.ok(a.hours.some((h) => h.blockers.includes('snow on the ground')));
+  assert.equal(a.best, null);
+});
+
+test('soil classification follows the texture triangle', () => {
+  assert.equal(classifySoil({ clay: 42, sand: 20 }), 'clay');
+  assert.equal(classifySoil({ clay: 8, sand: 82 }), 'sand');
+  assert.equal(classifySoil({ clay: 18, sand: 40 }), 'loam');
+  // High sand but also high clay is a sandy clay, which behaves like clay.
+  assert.equal(classifySoil({ clay: 36, sand: 72 }), 'clay');
+  assert.equal(classifySoil({ clay: null, sand: 20 }), null);
+  assert.equal(classifySoil({}), null);
 });
 
 test('missing optional columns fall back instead of throwing', () => {

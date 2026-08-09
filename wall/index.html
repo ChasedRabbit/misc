@@ -238,7 +238,7 @@
 
     <section class="card">
       <div class="eyebrow">Soil type</div>
-      <p class="muted" style="margin:6px 0 10px">Changes how long the ground stays too wet to dig and compact.</p>
+      <p class="muted" style="margin:6px 0 10px">Sets how much water the ground can hold before compaction stops working. Detected automatically where possible.</p>
       <div class="seg" role="group" aria-label="Soil type">
         <button type="button" data-soil="clay" aria-pressed="false">Clay</button>
         <button type="button" data-soil="loam" aria-pressed="false">Loam</button>
@@ -260,15 +260,16 @@
 
   <footer>
     <p id="loc-line"></p>
-    <p>Weather from <a href="https://open-meteo.com" rel="noopener">Open-Meteo</a>. Ground saturation is estimated from rainfall and drying conditions, not measured — dig a test hole before you trust it. Nothing here is engineering advice; walls over about 4 feet usually need a permit and a design.</p>
+    <p>Weather from <a href="https://open-meteo.com" rel="noopener">Open-Meteo</a>, soil texture from <a href="https://soilgrids.org" rel="noopener">SoilGrids</a>. Ground condition comes from modelled soil moisture where that's published and is estimated from rainfall otherwise — either way it's a model of the area, not a reading from your yard. Dig a test hole before you trust it. Nothing here is engineering advice; walls over about 4 feet usually need a permit and a design.</p>
+    <p>Call 811 before you dig. It's free, it's the law in most of the US, and it takes a few days.</p>
   </footer>
 </div>
 
 <script type="module">
-import { analyze, explainNow, fmtHour, fmtRun, fmtDay, SOIL } from './wall.js';
+import { analyze, explainNow, fmtHour, fmtRun, fmtDay, classifySoil, SOIL } from './wall.js';
 
 const $ = (s) => document.querySelector(s);
-const LS = { loc: 'wall.loc', soil: 'wall.soil' };
+const LS = { loc: 'wall.loc', soil: 'wall.soil', soilManual: 'wall.soilManual' };
 const DAY_START = 7, DAY_END = 18; // strip covers the 7am–7pm working day
 
 const params = new URLSearchParams(location.search);
@@ -277,6 +278,9 @@ const DEMO = params.get('demo') === '1';
 let state = {
   loc: readJSON(LS.loc),
   soil: localStorage.getItem(LS.soil) || 'loam',
+  // Once he picks a soil type himself, stop overriding him with the survey.
+  soilManual: localStorage.getItem(LS.soilManual) === '1',
+  detected: null,
   data: null,
 };
 
@@ -297,7 +301,15 @@ async function fetchForecast(lat, lon) {
   url.search = new URLSearchParams({
     latitude: lat,
     longitude: lon,
-    hourly: 'temperature_2m,relative_humidity_2m,precipitation,precipitation_probability,wind_speed_10m,cloud_cover,is_day,soil_temperature_0cm',
+    hourly: [
+      'temperature_2m', 'relative_humidity_2m', 'precipitation', 'precipitation_probability',
+      'wind_speed_10m', 'cloud_cover', 'is_day', 'soil_temperature_0cm',
+      // The land-surface model's own soil water, preferred over estimating it.
+      // Not every model publishes every layer; the engine takes the deepest
+      // one that comes back with real numbers.
+      'soil_moisture_0_to_1cm', 'soil_moisture_1_to_3cm', 'soil_moisture_3_to_9cm', 'soil_moisture_9_to_27cm',
+      'et0_fao_evapotranspiration', 'snow_depth',
+    ].join(','),
     daily: 'sunrise,sunset,temperature_2m_max,temperature_2m_min,precipitation_sum',
     temperature_unit: 'fahrenheit',
     wind_speed_unit: 'mph',
@@ -310,6 +322,56 @@ async function fetchForecast(lat, lon) {
   const res = await fetch(url);
   if (!res.ok) throw new Error(`Weather service returned ${res.status}`);
   return res.json();
+}
+
+// SoilGrids (ISRIC) — global soil texture by coordinate, free and keyless.
+// Best-effort: if it's slow, blocked or shaped differently than expected, the
+// manual toggle carries on working and nothing is said about it.
+const SOILGRIDS = 'https://rest.isric.org/soilgrids/v2.0/properties/query';
+
+async function detectSoil(lat, lon) {
+  const cacheKey = `wall.soilauto.${lat.toFixed(2)},${lon.toFixed(2)}`;
+  const cached = readJSON(cacheKey);
+  if (cached) return cached;
+
+  const url = new URL(SOILGRIDS);
+  url.searchParams.set('lat', lat);
+  url.searchParams.set('lon', lon);
+  url.searchParams.set('depth', '5-15cm');
+  url.searchParams.set('value', 'mean');
+  for (const prop of ['clay', 'sand', 'silt']) url.searchParams.append('property', prop);
+
+  // Don't let a slow lookup hold up anything the reader is waiting on.
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 8000);
+  try {
+    const res = await fetch(url, { signal: ctrl.signal });
+    if (!res.ok) return null;
+    const j = await res.json();
+    const layers = j?.properties?.layers;
+    if (!Array.isArray(layers)) return null;
+
+    const read = (name) => {
+      const L = layers.find((l) => l.name === name);
+      const v = L?.depths?.[0]?.values?.mean;
+      // SoilGrids reports g/kg with a documented divisor to reach percent.
+      const factor = L?.unit_measure?.d_factor ?? 10;
+      return Number.isFinite(v) ? v / factor : null;
+    };
+
+    const clay = read('clay');
+    const sand = read('sand');
+    const key = classifySoil({ clay, sand });
+    if (!key) return null;
+
+    const out = { key, clay: Math.round(clay), sand: Math.round(sand) };
+    localStorage.setItem(cacheKey, JSON.stringify(out));
+    return out;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function geocode(q) {
@@ -343,6 +405,17 @@ async function load() {
   try {
     state.data = await fetchForecast(state.loc.lat, state.loc.lon);
     render();
+    // Runs after the forecast is on screen, and re-renders only if it changes
+    // something. A failure here is silent by design.
+    detectSoil(state.loc.lat, state.loc.lon).then((found) => {
+      if (!found) return;
+      state.detected = found;
+      if (!state.soilManual && found.key !== state.soil) {
+        state.soil = found.key;
+        localStorage.setItem(LS.soil, state.soil);
+      }
+      render();
+    });
   } catch (err) {
     $('#best-day').textContent = '—';
     banner(`Couldn't get the forecast: ${err.message}. Check the connection and pull to refresh.`, 'err');
@@ -408,11 +481,15 @@ function render() {
   meter.style.background = pct >= 100 ? 'var(--no)' : pct > 75 ? 'var(--marginal)' : 'var(--go)';
   $('#ground-label').textContent =
     pct >= 100 ? 'Too wet to dig' : pct > 75 ? 'Heavy but workable' : 'Workable';
-  $('#ground-note').textContent = pct >= 100
+  const headline = pct >= 100
     ? (a.dryAt && !a.dryAt.past
         ? `On ${a.soil.label.toLowerCase()} soil it should come good around ${dayLabel(a.dryAt.day)}.`
         : 'Still draining — no clear date in this forecast.')
-    : `Compaction will hold. ${a.hasSoilTemp ? 'Frost checks use real ground temperature.' : 'No ground-temperature data here, so frost is judged from air temperature.'}`;
+    : 'Compaction will hold.';
+  const provenance = a.moisture.source === 'measured'
+    ? `Measured soil moisture at ${a.moisture.layer}, about base-course depth.`
+    : `Estimated from rainfall${a.moisture.usedEt0 ? ' and evaporation rate' : ''} — this location publishes no soil moisture.`;
+  $('#ground-note').textContent = `${headline} ${provenance}`;
 
   // Week
   const days = $('#days');
@@ -480,7 +557,16 @@ function render() {
   for (const b of document.querySelectorAll('[data-soil]')) {
     b.setAttribute('aria-pressed', String(b.dataset.soil === state.soil));
   }
-  $('#soil-examples').textContent = `${a.soil.label}: ${a.soil.examples}`;
+  const d = state.detected;
+  if (d && !state.soilManual) {
+    $('#soil-examples').textContent =
+      `Soil survey for this spot: ${d.clay}% clay, ${d.sand}% sand — treated as ${SOIL[d.key].label.toLowerCase()}. Tap to change it if you know better.`;
+  } else if (d && state.soilManual && d.key !== state.soil) {
+    $('#soil-examples').textContent =
+      `${a.soil.label}: ${a.soil.examples}. (The soil survey says ${SOIL[d.key].label.toLowerCase()} here.)`;
+  } else {
+    $('#soil-examples').textContent = `${a.soil.label}: ${a.soil.examples}`;
+  }
 
   const tb = $('#table tbody');
   tb.textContent = '';
@@ -567,7 +653,9 @@ function setLoc(loc) {
 for (const b of document.querySelectorAll('[data-soil]')) {
   b.addEventListener('click', () => {
     state.soil = b.dataset.soil;
+    state.soilManual = true;
     localStorage.setItem(LS.soil, state.soil);
+    localStorage.setItem(LS.soilManual, '1');
     if (state.data) render();
   });
 }
