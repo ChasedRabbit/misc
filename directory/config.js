@@ -15,7 +15,15 @@ export const CONFIG = {
 
   // Optional. A form endpoint (Formspree, a Google Apps Script web app, etc.)
   // to POST the submission to instead of opening an email. See README.md.
+  //
+  // A Google Apps Script endpoint (directory/sync.gs) additionally lets
+  // admin.html's photo-day mode see who already submitted online — the same
+  // URL serves both purposes, so nothing else needs setting for that.
   postUrl: '',
+
+  // Optional. Matches the SECRET constant in sync.gs, if you set one there.
+  // Only relevant with an Apps Script postUrl; ignored otherwise.
+  syncKey: '',
 
   // Optional friendly nudge, e.g. 'Sunday, September 6'. Blank hides it.
   deadline: '',
@@ -32,6 +40,7 @@ export function configFromUrl(search, base = CONFIG) {
     c: 'churchName',
     to: 'officeEmail',
     post: 'postUrl',
+    key: 'syncKey',
     by: 'deadline',
     help: 'helpContact',
   };

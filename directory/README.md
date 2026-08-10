@@ -37,7 +37,9 @@ the files are ES modules, so `file://` won't work.
    details.
 5. **On photo day**, open `admin.html` on a tablet, search the family, and hit
    Open. Confirm it with them while they're standing there. Saved on the device,
-   no internet needed once the page has loaded.
+   no internet needed once the page has loaded. If a family already confirmed
+   online, the search shows that before you open anything — see "Sending links
+   out *and* doing photo day" below to wire that up.
 6. **Collect.** Emailed submissions land in your inbox. Anything gathered on the
    tablet exports as two CSVs: *the changes* (one row per thing to retype) and
    *the corrected directory* (one row per person, ready to re-import).
@@ -63,6 +65,55 @@ have more than a couple hundred households to chase, move to a form service.
 If a POST fails, the page falls back to email or copy rather than losing what
 was typed.
 
+## Sending links out *and* doing photo day, without double-asking
+
+If you send links ahead of time and also run a photo table, someone will
+inevitably submit online and then show up in person a few weeks later — and
+without a shared place both routes can see, the tablet has no way to know that
+and will ask them to do it again.
+
+**Email can't provide that shared place — it only reaches your inbox, which the
+tablet can't read.** A form service can, if it's one you can *query back*, not
+just send to. That's what `directory/sync.gs` is: a small Google Apps Script
+web app, backed by a Sheet, that both sides talk to — the family form posts to
+it, and the photo-day tablet asks it "who's already done?" before showing the
+search results.
+
+**Setup** (free, no server of your own, takes about five minutes):
+
+1. Create a Google Sheet, open **Extensions → Apps Script**, and paste in the
+   contents of `directory/sync.gs`.
+2. **Deploy → New deployment → Web app.** Execute as **Me**; who has access,
+   **Anyone**. (Not "Anyone with a Google account" — the page runs in a
+   family's browser with nobody signed in.)
+3. Copy the deployment URL into `postUrl` in `config.js` (or the office tool's
+   settings). That's the whole integration — the same URL both accepts
+   submissions and answers the tablet's "who's done" check.
+4. Optional: set `SECRET` near the top of `sync.gs` to a random string, and the
+   matching `syncKey` in `config.js`, so a stranger who finds the URL can't
+   write junk into your sheet. Full submissions (names, addresses, phones) only
+   ever go *to* the sheet, which only people with access to your Google account
+   can open — the tablet's read-back query only ever receives a household ID,
+   a timestamp, and a count of what changed. See the comments at the top of
+   `sync.gs` for the reasoning.
+
+**What it looks like at the table:** search a name, and a household that
+already confirmed online shows a pill — *confirmed online · Aug 10* — right
+next to their name, with the button relabelled **Open anyway** rather than
+disappearing outright, in case they want to add something in person. Nothing
+confirmed shows a plain **Open**. If two confirmations exist for the same
+household — say, online in July and again at the table in September — the
+newer one is what's shown.
+
+It degrades safely: with no `postUrl` set, admin.html behaves exactly as
+before. If the venue's wifi drops mid-session, the last successful check stays
+cached and photo day keeps working off it; a manual **Retry** appears if the
+connection is down when you land on the page.
+
+Formspree and similar form services can't answer "who's done" — they only
+accept submissions — so pointing `postUrl` at one still delivers submissions
+normally, but the tablet won't show any online-confirmed pills.
+
 ## Settings
 
 Edit `config.js` and commit. Links already sent pick up the change, because the
@@ -73,14 +124,16 @@ export const CONFIG = {
   churchName: 'Grace Chapel',
   officeEmail: 'office@gracechapel.org',
   postUrl: '',
+  syncKey: '',
   deadline: 'Sunday 6 September',
   helpContact: 'the office at (804) 555-0100',
 };
 ```
 
 Any of these can also be overridden on a single link with a query parameter
-(`?c=`, `?to=`, `?post=`, `?by=`, `?help=`), which is what the office tool does
-while you're trying settings out. Settings in `config.js` keep the links shorter.
+(`?c=`, `?to=`, `?post=`, `?key=`, `?by=`, `?help=`), which is what the office
+tool does while you're trying settings out. Settings in `config.js` keep the
+links shorter.
 
 ## How households are worked out
 
@@ -172,13 +225,16 @@ holds no data until you load a file — but it's not a page you'd advertise.
 ## Development
 
 ```sh
-node --test 'test/*.mjs'    # this tool's tests are directory.test.mjs + csv.test.mjs
+node --test 'test/*.mjs'    # directory.test.mjs, csv.test.mjs, sync.test.mjs
 ```
 
-`directory.js` and `csv.js` are pure functions with no DOM and no fetch, which
-is what makes the interesting parts testable: what counts as a change, whether a
-record survives a round trip through a link, and how a real export groups into
-households. The pages hold the DOM glue.
+`directory.js`, `csv.js` and `sync.js` are pure functions with no DOM and no
+fetch, which is what makes the interesting parts testable: what counts as a
+change, whether a record survives a round trip through a link, how a real
+export groups into households, and how two independent "already submitted"
+lists merge when they disagree. The pages hold the DOM glue and the actual
+`fetch()` calls. `sync.gs` runs on Google's servers, not in the browser, and
+is exercised by hand rather than by `node --test`.
 
 The comparison is deliberately forgiving — `(804) 555-0142` and `804.555.0142`
 are the same number, and no family should be told their number changed because

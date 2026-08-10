@@ -186,6 +186,7 @@ import {
   submissionText, submissionSubject, submissionPayload, mailtoUrl, escapeHtml,
 } from './directory.js';
 import { CONFIG, configFromUrl } from './config.js';
+import { buildSubmitBody } from './sync.js';
 
 const params = new URLSearchParams(location.search);
 const cfg = configFromUrl(location.search);
@@ -719,8 +720,13 @@ async function send() {
     try {
       const res = await fetch(cfg.postUrl, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...payload, summary: text }),
+        // text/plain, not application/json: a JSON content-type triggers a
+        // CORS preflight (an OPTIONS request) that Google Apps Script cannot
+        // answer, which would turn every submission into a network error.
+        // Formspree and most form services read a text body as JSON just
+        // as happily, so this works either way.
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: buildSubmitBody({ ...payload, summary: text }, cfg.syncKey),
       });
       if (!res.ok) throw new Error(`The server replied ${res.status}.`);
       mode = 'sent';

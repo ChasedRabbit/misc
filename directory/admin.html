@@ -187,6 +187,15 @@
           <input type="url" id="post" placeholder="https://formspree.io/f/xxxxxxx">
           <div class="hint">Submissions arrive automatically instead of by email. See README.md for the trade-offs.</div>
         </div>
+        <div class="field" style="margin-top:8px">
+          <label for="key">Shared key (optional)</label>
+          <input type="text" id="key" placeholder="matches SECRET in sync.gs, if you set one">
+          <div class="hint">
+            Only used with the Google Apps Script endpoint in <code>directory/sync.gs</code> — that's also
+            what lets Photo day below know who already submitted online. Formspree and similar services
+            ignore this.
+          </div>
+        </div>
       </details>
       <div class="notice info" id="config-note"></div>
     </div>
@@ -210,6 +219,7 @@
         Open a family on a tablet, confirm it with them while they're standing there, and it's saved
         on this device. No internet needed after the page has loaded.
       </p>
+      <div class="notice info" id="sync-status"></div>
       <input type="text" class="search" id="search" placeholder="Search by family name or address…">
       <div class="scroll"><table id="kiosk"></table></div>
     </div>
@@ -240,6 +250,7 @@ import {
   normalizeRecord, buildLink, householdTitle, addressLine, formatPhone,
   personName, escapeHtml, encodeRecord,
 } from './directory.js';
+import { parseCompletedList, withStatus, isStale } from './sync.js';
 
 const STORE_KEY = 'churchdir.submissions.v1';
 const SETTINGS_KEY = 'churchdir.settings.v1';
@@ -437,10 +448,11 @@ function loadSettings() {
     email: saved.email || '',
     deadline: saved.deadline || '',
     post: saved.post || '',
+    key: saved.key || '',
   };
 }
 
-for (const key of ['base', 'church', 'email', 'deadline', 'post']) {
+for (const key of ['base', 'church', 'email', 'deadline', 'post', 'key']) {
   $(key).value = settings[key];
   $(key).addEventListener('input', () => {
     settings[key] = $(key).value.trim();
@@ -450,6 +462,7 @@ for (const key of ['base', 'church', 'email', 'deadline', 'post']) {
     renderConfigNote();
   });
 }
+$('post').addEventListener('change', () => refreshSync(true));
 
 /** Settings ride in the query string so they can be changed without a redeploy. */
 function linkQuery(extra = {}) {
@@ -527,31 +540,130 @@ $('copy-links').addEventListener('click', async () => {
   }
 });
 
-// --- photo day ------------------------------------------------------------
+// --- photo day --------------------------------------------------------
+//
+// The whole point of this section is that a family who already confirmed
+// online shouldn't be asked again at the table. "Already confirmed" can come
+// from two places: this device (an earlier photo-day entry, saved locally so
+// it works with no wifi) and the live endpoint (an emailed-in or online
+// submission, which only a Google Apps Script postUrl can report — see
+// sync.gs). withStatus() in sync.js merges both, preferring whichever is
+// newer when a household shows up in both.
+
+const SYNC_CACHE_KEY = 'churchdir.sync.v1';
+const SYNC_TTL_MS = 2 * 60 * 1000;
+let syncState = loadSyncCache();
+
+function loadSyncCache() {
+  try {
+    const saved = JSON.parse(sessionStorage.getItem(SYNC_CACHE_KEY) || 'null');
+    if (saved && Array.isArray(saved.completed)) return { ...saved, error: null, loading: false };
+  } catch (e) { /* nothing to do */ }
+  return { completed: [], fetchedAt: 0, error: null, loading: false };
+}
+
+function saveSyncCache() {
+  try {
+    sessionStorage.setItem(SYNC_CACHE_KEY, JSON.stringify({
+      completed: syncState.completed, fetchedAt: syncState.fetchedAt,
+    }));
+  } catch (e) { /* private mode */ }
+}
+
+async function refreshSync(force) {
+  // Formspree and similar services have no way to answer "who has
+  // submitted", so this only does anything useful against an Apps Script
+  // endpoint — but it's harmless to try against anything else: a failed
+  // fetch just leaves the local-only "done" status in place.
+  if (!settings.post) { syncState = { completed: [], fetchedAt: 0, error: null, loading: false }; renderSyncStatus(); renderKiosk(); return; }
+  if (!force && !isStale(syncState.fetchedAt, SYNC_TTL_MS)) { renderSyncStatus(); return; }
+
+  syncState = { ...syncState, loading: true };
+  renderSyncStatus();
+  try {
+    const url = new URL(settings.post);
+    if (settings.key) url.searchParams.set('key', settings.key);
+    const res = await fetch(url, { method: 'GET' });
+    const text = await res.text();
+    const completed = parseCompletedList(text);
+    syncState = { completed, fetchedAt: Date.now(), error: null, loading: false };
+    saveSyncCache();
+  } catch (err) {
+    // Keep whatever was cached — a stale "who's done" list is still more
+    // useful than none, and photo day should never grind to a halt because
+    // the venue's wifi dropped.
+    syncState = { ...syncState, error: err.message || 'Could not reach the online list.', loading: false };
+  }
+  renderSyncStatus();
+  renderKiosk();
+}
+
+function renderSyncStatus() {
+  const el = $('sync-status');
+  if (!settings.post) {
+    el.style.display = 'none';
+    return;
+  }
+  el.style.display = '';
+  if (syncState.loading) {
+    el.textContent = 'Checking who has already submitted online…';
+  } else if (syncState.error) {
+    const age = syncState.fetchedAt ? ` Showing the list from ${formatWhen(new Date(syncState.fetchedAt).toISOString())}.` : ' Nothing cached yet — online status is unavailable until this connects.';
+    el.innerHTML = `Couldn't check online status (${escapeHtml(syncState.error)}).${age} <button class="link-btn" id="sync-retry">Retry</button>`;
+    const retry = document.getElementById('sync-retry');
+    if (retry) retry.addEventListener('click', () => refreshSync(true));
+  } else {
+    el.textContent = `${syncState.completed.length} household${syncState.completed.length === 1 ? '' : 's'} confirmed online as of ${formatWhen(new Date(syncState.fetchedAt).toISOString())}.`;
+  }
+}
+
+function formatWhen(iso) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  const sameDay = d.toDateString() === new Date().toDateString();
+  return sameDay
+    ? d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })
+    : d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
+function statusPill(status) {
+  if (!status) return '';
+  const when = escapeHtml(formatWhen(status.submittedAt));
+  if (status.source === 'online') {
+    return ` <span class="pill done">confirmed online · ${when}</span>`;
+  }
+  return ` <span class="pill done">confirmed here · ${when}</span>`;
+}
 
 $('search').addEventListener('input', renderKiosk);
 
 function renderKiosk() {
   if (!records.length) { $('kiosk').innerHTML = ''; return; }
   const q = $('search').value.trim().toLowerCase();
-  const done = new Set(loadResponses().map((s) => s.id));
-  const matches = records.filter((r) => {
-    if (!q) return true;
-    const hay = `${householdTitle(r)} ${addressLine(r.address)} ${r.people.map(personName).join(' ')}`.toLowerCase();
-    return hay.includes(q);
-  });
+  // An untyped search would otherwise dump all 4,000+ rows into the table at
+  // once, which is exactly the crawl a tablet at a photo table can't afford —
+  // and nobody scrolling a list that long instead of typing three letters.
+  if (!q) {
+    $('kiosk').innerHTML = `<tr><td class="muted">Type a name or address to find a household.</td></tr>`;
+    return;
+  }
+  const matches = withStatus(
+    records.filter((r) => `${householdTitle(r)} ${addressLine(r.address)} ${r.people.map(personName).join(' ')}`.toLowerCase().includes(q)),
+    syncState.completed,
+    loadResponses(),
+  );
 
   $('kiosk').innerHTML =
     `<tr><th>Household</th><th>Address</th><th></th></tr>` +
     (matches.length
-      ? matches.map((r) => `
+      ? matches.slice(0, 50).map((r) => `
         <tr>
-          <td><strong>${escapeHtml(householdTitle(r))}</strong>
-              ${done.has(r.id) ? ' <span class="pill done">done</span>' : ''}<br>
+          <td><strong>${escapeHtml(householdTitle(r))}</strong>${statusPill(r.status)}<br>
               <span class="muted">${escapeHtml(r.people.map(personName).join(', '))}</span></td>
           <td class="muted">${escapeHtml(addressLine(r.address) || '—')}</td>
-          <td><a class="btn" href="${escapeHtml(linkFor(r, { kiosk: '1' }))}">Open</a></td>
-        </tr>`).join('')
+          <td><a class="btn" href="${escapeHtml(linkFor(r, { kiosk: '1' }))}">${r.status ? 'Open anyway' : 'Open'}</a></td>
+        </tr>`).join('') +
+        (matches.length > 50 ? `<tr><td colspan="3" class="muted">${matches.length - 50} more match — narrow the search.</td></tr>` : '')
       : `<tr><td colspan="3" class="muted">Nothing matches "${escapeHtml(q)}".</td></tr>`);
 }
 
@@ -597,8 +709,9 @@ $('clear').addEventListener('click', () => {
   renderKiosk();
 });
 
-// Coming back from a kiosk submission should show it immediately.
-window.addEventListener('pageshow', () => { renderResponses(); renderKiosk(); });
+// Coming back from a kiosk submission should show it immediately, and is
+// also a good moment to recheck online status — wifi may have come back.
+window.addEventListener('pageshow', () => { renderResponses(); renderKiosk(); refreshSync(false); });
 
 // --- odds and ends --------------------------------------------------------
 
@@ -620,6 +733,8 @@ function flash(btn, text) {
 
 renderResponses();
 restoreRoster();
+renderSyncStatus();
+refreshSync(false);
 </script>
 </body>
 </html>
