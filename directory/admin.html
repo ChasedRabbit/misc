@@ -1,0 +1,614 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<meta name="robots" content="noindex">
+<title>Directory update — office tool</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ctext y='26' font-size='26'%3E%F0%9F%97%82%EF%B8%8F%3C/text%3E%3C/svg%3E">
+<style>
+  :root {
+    color-scheme: light;
+    --surface-1: #ffffff;
+    --plane: #f6f5f2;
+    --text-primary: #14140f;
+    --text-secondary: #55534c;
+    --text-muted: #8a877e;
+    --border: rgba(20, 20, 15, 0.12);
+    --grid: #e6e4dd;
+    --accent: #2f6d4f;
+    --accent-text: #ffffff;
+    --warn: #8a5a10;
+    --warn-bg: #fdf5e6;
+    --danger: #a8341f;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) {
+      color-scheme: dark;
+      --surface-1: #1c1c1a;
+      --plane: #101010;
+      --text-primary: #f7f7f4;
+      --text-secondary: #c2c0b6;
+      --text-muted: #8a877e;
+      --border: rgba(255, 255, 255, 0.13);
+      --grid: #2e2e2b;
+      --accent: #4c9a72;
+      --accent-text: #06130d;
+      --warn: #e5b768;
+      --warn-bg: #2a2417;
+      --danger: #e08573;
+    }
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--plane); color: var(--text-primary);
+    font: 16px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  .wrap { max-width: 900px; margin: 0 auto; padding: 16px 16px 64px; }
+
+  header { padding: 12px 0 4px; }
+  h1 { font-size: 24px; font-weight: 650; margin: 0; letter-spacing: -0.02em; }
+  .lede { color: var(--text-secondary); margin: 8px 0 0; }
+
+  h2 { font-size: 13px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
+       color: var(--text-muted); margin: 28px 0 10px; }
+
+  .card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 14px;
+          padding: 16px; margin-bottom: 12px; }
+
+  button { font: inherit; color: inherit; cursor: pointer; }
+  .btn { background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px;
+         padding: 9px 14px; min-height: 42px; }
+  .btn:hover { border-color: var(--text-muted); }
+  .btn.primary { background: var(--accent); color: var(--accent-text); border-color: transparent; font-weight: 600; }
+  .btn.danger { color: var(--danger); }
+  .btn[disabled] { opacity: 0.45; cursor: default; }
+  .btn-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+
+  label.file {
+    display: block; border: 2px dashed var(--border); border-radius: 14px;
+    padding: 28px 16px; text-align: center; cursor: pointer; background: var(--surface-1);
+  }
+  label.file:hover { border-color: var(--accent); }
+  label.file input { display: none; }
+  label.file strong { display: block; font-size: 17px; margin-bottom: 4px; }
+  label.file span { color: var(--text-secondary); font-size: 15px; }
+
+  input[type=text], input[type=email], input[type=url], select, textarea {
+    font: inherit; font-size: 16px; color: var(--text-primary); background: var(--plane);
+    border: 1px solid var(--border); border-radius: 9px; padding: 8px 10px; min-height: 40px; width: 100%;
+  }
+  .field { margin-bottom: 10px; }
+  .field > label { display: block; font-size: 12.5px; font-weight: 600; color: var(--text-muted);
+                   text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 3px; }
+  .hint { font-size: 14px; color: var(--text-muted); margin-top: 3px; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 15px; }
+  th { text-align: left; font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase;
+       color: var(--text-muted); padding: 6px 8px; border-bottom: 1px solid var(--grid); }
+  td { padding: 8px; border-bottom: 1px solid var(--grid); vertical-align: top; }
+  tr:last-child td { border-bottom: none; }
+  .scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+
+  .map-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 10px; }
+  .map-grid .field { margin: 0; }
+  .map-grid select { font-size: 15px; }
+  .map-grid .auto { color: var(--accent); }
+
+  .notice { border-radius: 11px; padding: 11px 13px; font-size: 15px; margin: 10px 0; }
+  .notice.warn { background: var(--warn-bg); color: var(--warn); border: 1px solid var(--warn); }
+  .notice.info { background: var(--surface-1); border: 1px solid var(--border); color: var(--text-secondary); }
+  .notice ul { margin: 6px 0 0; padding-left: 18px; }
+
+  .pill { display: inline-block; font-size: 12px; font-weight: 600; padding: 2px 8px;
+          border-radius: 999px; background: var(--grid); color: var(--text-secondary); }
+  .pill.done { background: var(--accent); color: var(--accent-text); }
+
+  .linkcell { font: 12.5px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace;
+              word-break: break-all; color: var(--text-secondary); max-width: 380px; }
+  .search { margin-bottom: 10px; }
+  .muted { color: var(--text-muted); }
+  .count { font-weight: 600; }
+  details { margin-top: 10px; }
+  summary { cursor: pointer; color: var(--accent); padding: 6px 0; }
+  pre { background: var(--plane); border: 1px solid var(--border); border-radius: 10px; padding: 12px;
+        font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; overflow-x: auto; }
+  .step-off { opacity: 0.45; pointer-events: none; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Directory update — office tool</h1>
+    <p class="lede">Everything here happens in this browser. The file you load is never uploaded anywhere.</p>
+  </header>
+
+  <h2>1 · Load your export</h2>
+  <div id="step-load">
+    <label class="file">
+      <input type="file" id="file" accept=".csv,.tsv,.txt,text/csv">
+      <strong>Choose your CSV export</strong>
+      <span>Or drop it here. One row per person or one per family — both work.</span>
+    </label>
+    <div class="btn-row" style="margin-top:10px">
+      <button class="btn" id="try-sample">Try it with sample data first</button>
+    </div>
+    <div id="load-msg"></div>
+  </div>
+
+  <div id="rest" hidden>
+    <h2>2 · Check the columns</h2>
+    <div class="card">
+      <p class="muted" style="margin-top:0;font-size:15px">
+        Matched automatically where the names were recognisable. Fix anything wrong —
+        <strong>Family ID</strong> matters most, since it's what lets updates be matched back on re-import.
+      </p>
+      <div class="map-grid" id="mapping"></div>
+      <div id="map-warnings"></div>
+    </div>
+
+    <h2>3 · Check the households</h2>
+    <div class="card">
+      <p id="group-summary" style="margin-top:0"></p>
+      <div class="scroll"><table id="preview"></table></div>
+      <details>
+        <summary>Show all households</summary>
+        <div class="scroll"><table id="preview-all"></table></div>
+      </details>
+    </div>
+
+    <h2>4 · Settings for the links</h2>
+    <div class="card">
+      <div class="field">
+        <label for="base">Address of the form</label>
+        <input type="text" id="base" placeholder="https://yourchurch.github.io/misc/directory/">
+        <div class="hint">Where you've put <code>index.html</code>. Filled in from this page's address.</div>
+      </div>
+      <div class="field">
+        <label for="church">Church name</label>
+        <input type="text" id="church" placeholder="Grace Chapel">
+      </div>
+      <div class="field">
+        <label for="email">Office email</label>
+        <input type="email" id="email" placeholder="office@yourchurch.org">
+        <div class="hint">Where submissions are sent. Leave blank and families get a "copy this" summary instead.</div>
+      </div>
+      <div class="field">
+        <label for="deadline">Deadline shown to families (optional)</label>
+        <input type="text" id="deadline" placeholder="Sunday 6 September">
+      </div>
+      <details>
+        <summary>Advanced: post submissions to a form service instead</summary>
+        <div class="field" style="margin-top:8px">
+          <label for="post">POST endpoint</label>
+          <input type="url" id="post" placeholder="https://formspree.io/f/xxxxxxx">
+          <div class="hint">Submissions arrive automatically instead of by email. See README.md for the trade-offs.</div>
+        </div>
+      </details>
+      <div class="notice info" id="config-note"></div>
+    </div>
+
+    <h2>5 · Send the links, or collect in person</h2>
+    <div class="card">
+      <div class="btn-row">
+        <button class="btn primary" id="dl-links">Download links (CSV for mail merge)</button>
+        <button class="btn" id="copy-links">Copy links to clipboard</button>
+      </div>
+      <p class="hint" style="margin-top:10px">
+        Each family gets their own link containing only their own details. Mail-merge the
+        <code>link</code> column into your email or texting tool.
+      </p>
+      <div class="scroll" style="margin-top:12px"><table id="links"></table></div>
+    </div>
+
+    <h2>6 · Photo day</h2>
+    <div class="card">
+      <p style="margin-top:0">
+        Open a family on a tablet, confirm it with them while they're standing there, and it's saved
+        on this device. No internet needed after the page has loaded.
+      </p>
+      <input type="text" class="search" id="search" placeholder="Search by family name or address…">
+      <div class="scroll"><table id="kiosk"></table></div>
+    </div>
+
+    <h2>7 · Collect what came back</h2>
+    <div class="card">
+      <p id="collected" style="margin-top:0"></p>
+      <div class="btn-row">
+        <button class="btn primary" id="dl-updates">Download the changes</button>
+        <button class="btn" id="dl-directory">Download the corrected directory</button>
+        <button class="btn danger" id="clear">Clear saved responses</button>
+      </div>
+      <p class="hint" style="margin-top:10px">
+        Responses collected on <em>this device</em> in photo-day mode. Emailed submissions arrive in
+        your inbox instead.
+      </p>
+      <div class="scroll" style="margin-top:12px"><table id="responses"></table></div>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+import {
+  parseCsv, toCsv, guessMapping, buildRecords, looksPerPerson,
+  updatesToCsv, directoryToCsv, FIELD_TARGETS,
+} from './csv.js';
+import {
+  normalizeRecord, buildLink, householdTitle, addressLine, formatPhone,
+  personName, escapeHtml, encodeRecord,
+} from './directory.js';
+
+const STORE_KEY = 'churchdir.submissions.v1';
+const SETTINGS_KEY = 'churchdir.settings.v1';
+// The loaded roster lives in sessionStorage, not localStorage: on photo day it
+// has to survive opening a family and coming back, but it is the whole
+// congregation's data and has no business outliving the browser tab.
+const ROSTER_KEY = 'churchdir.roster.v1';
+
+const $ = (id) => document.getElementById(id);
+
+let rows = [];
+let headers = [];
+let mapping = {};
+let records = [];
+let warnings = [];
+
+const settings = loadSettings();
+
+// --- loading --------------------------------------------------------------
+
+const SAMPLE = [
+  'Family ID,Last Name,First Name,Relationship,Address Line 1,City,State,Zip,Home Phone,Cell Phone,Email,Birthdate',
+  'F1001,Fielden,Harold,Head,1204 Oak Ridge Rd,Glen Allen,VA,23060,(804) 555-0142,(804) 555-0143,harold@example.com,3/4/1971',
+  'F1001,Fielden,Sarah,Spouse,1204 Oak Ridge Rd,Glen Allen,VA,23060,(804) 555-0142,(804) 555-0144,sarah@example.com,11/12/1973',
+  'F1001,Fielden,Emma,Child,,,,,,,,7/22/2009',
+  'F1002,Alvarez,Miguel,Head,88 Cedar Ln,Ashland,VA,23005,(804) 555-0200,(804) 555-0201,miguel@example.com,1/9/1980',
+  'F1002,Alvarez,Rosa,Spouse,88 Cedar Ln,Ashland,VA,23005,(804) 555-0200,(804) 555-0202,rosa@example.com,5/30/1982',
+  'F1003,Whitfield,Dorothy,Head,17 Chapel St,Ashland,VA,23005,(804) 555-0310,,,2/14/1938',
+].join('\n');
+
+$('file').addEventListener('change', (e) => {
+  const file = e.target.files && e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => loadText(String(reader.result), file.name);
+  reader.onerror = () => showLoadError(`Couldn't read ${file.name}.`);
+  reader.readAsText(file);
+});
+
+$('try-sample').addEventListener('click', () => loadText(SAMPLE, 'sample data'));
+
+for (const type of ['dragover', 'drop']) {
+  document.addEventListener(type, (e) => {
+    e.preventDefault();
+    if (type !== 'drop') return;
+    const file = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => loadText(String(reader.result), file.name);
+    reader.readAsText(file);
+  });
+}
+
+function showLoadError(msg) {
+  $('load-msg').innerHTML = `<div class="notice warn">${escapeHtml(msg)}</div>`;
+}
+
+function loadText(text, name, restoring = false) {
+  rows = parseCsv(text);
+  if (rows.length < 2) {
+    showLoadError('That file has a header row but no data rows — or it isn\'t a CSV.');
+    return;
+  }
+  headers = rows[0];
+  mapping = guessMapping(headers);
+  if (restoring && restoring.mapping) mapping = restoring.mapping;
+
+  $('load-msg').innerHTML = `<div class="notice info">Loaded <span class="count">${rows.length - 1}</span> ${rows.length === 2 ? 'row' : 'rows'} from <strong>${escapeHtml(name)}</strong>.${restoring ? ' <button class="btn" id="forget" style="margin-left:8px">Load a different file</button>' : ''}</div>`;
+  if (restoring) $('forget').addEventListener('click', forgetRoster);
+
+  $('rest').hidden = false;
+  rebuild();
+  renderMapping();
+  saveRoster(text, name);
+  if (!restoring) $('rest').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function saveRoster(text, name) {
+  try {
+    sessionStorage.setItem(ROSTER_KEY, JSON.stringify({ text, name, mapping }));
+  } catch (e) {
+    // Quota or private mode: the tool still works, it just won't survive
+    // navigating away, so say so rather than failing silently on photo day.
+    $('load-msg').insertAdjacentHTML('beforeend',
+      `<div class="notice warn">This browser wouldn't keep the file in memory, so you'll need to re-load it after opening a family. Photo-day mode still works.</div>`);
+  }
+}
+
+function forgetRoster() {
+  try { sessionStorage.removeItem(ROSTER_KEY); } catch (e) { /* nothing to do */ }
+  location.reload();
+}
+
+function restoreRoster() {
+  let saved = null;
+  try { saved = JSON.parse(sessionStorage.getItem(ROSTER_KEY) || 'null'); } catch (e) { return false; }
+  if (!saved || !saved.text) return false;
+  loadText(saved.text, saved.name, saved);
+  return true;
+}
+
+// --- mapping --------------------------------------------------------------
+
+function renderMapping() {
+  const auto = guessMapping(headers);
+  $('mapping').innerHTML = FIELD_TARGETS.map((t) => {
+    const options = ['<option value="">— not in my file —</option>'].concat(
+      headers.map((h, i) => `<option value="${i}"${mapping[t.key] === i ? ' selected' : ''}>${escapeHtml(h || `(column ${i + 1})`)}</option>`)
+    ).join('');
+    const wasAuto = auto[t.key] !== undefined && auto[t.key] === mapping[t.key];
+    return `
+      <div class="field">
+        <label for="map-${t.key}">${escapeHtml(t.label)}${wasAuto ? ' <span class="auto">✓</span>' : ''}</label>
+        <select id="map-${t.key}" data-target="${t.key}">${options}</select>
+        ${t.hint ? `<div class="hint">${escapeHtml(t.hint)}</div>` : ''}
+      </div>`;
+  }).join('');
+}
+
+$('mapping').addEventListener('change', (e) => {
+  const sel = e.target.closest('select[data-target]');
+  if (!sel) return;
+  const key = sel.dataset.target;
+  if (sel.value === '') delete mapping[key];
+  else mapping[key] = Number(sel.value);
+  rebuild();
+  // Keep the correction, so coming back from a family doesn't undo it.
+  try {
+    const saved = JSON.parse(sessionStorage.getItem(ROSTER_KEY) || 'null');
+    if (saved) sessionStorage.setItem(ROSTER_KEY, JSON.stringify({ ...saved, mapping }));
+  } catch (e) { /* nothing to do */ }
+});
+
+// --- building -------------------------------------------------------------
+
+function rebuild() {
+  const built = buildRecords(rows, mapping);
+  records = built.records.map(normalizeRecord);
+  warnings = built.warnings;
+  renderWarnings();
+  renderPreview();
+  renderLinks();
+  renderKiosk();
+  renderResponses();
+  renderConfigNote();
+}
+
+function renderWarnings() {
+  $('map-warnings').innerHTML = warnings.length
+    ? `<div class="notice warn"><strong>Worth checking:</strong><ul>${warnings.map((w) => `<li>${escapeHtml(w)}</li>`).join('')}</ul></div>`
+    : `<div class="notice info">Nothing looks amiss.</div>`;
+}
+
+function householdRow(r) {
+  return `
+    <tr>
+      <td><span class="pill">${escapeHtml(r.id)}</span></td>
+      <td><strong>${escapeHtml(householdTitle(r))}</strong><br>
+          <span class="muted">${escapeHtml(r.people.map(personName).join(', ') || 'nobody listed')}</span></td>
+      <td>${escapeHtml(addressLine(r.address) || '—')}</td>
+      <td>${escapeHtml(formatPhone(r.phone) || '—')}</td>
+    </tr>`;
+}
+
+function renderPreview() {
+  const head = `<tr><th>ID</th><th>Household</th><th>Address</th><th>Phone</th></tr>`;
+  const people = records.reduce((n, r) => n + r.people.length, 0);
+  $('group-summary').innerHTML =
+    `<span class="count">${records.length}</span> household${records.length === 1 ? '' : 's'}, ` +
+    `<span class="count">${people}</span> ${people === 1 ? 'person' : 'people'}` +
+    (looksPerPerson(rows, mapping) ? ' — read as one row per person.' : ' — read as one row per family.');
+  $('preview').innerHTML = head + records.slice(0, 5).map(householdRow).join('');
+  $('preview-all').innerHTML = head + records.map(householdRow).join('');
+}
+
+// --- settings -------------------------------------------------------------
+
+function loadSettings() {
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}'); } catch (e) { saved = {}; }
+  return {
+    base: saved.base || location.href.replace(/admin\.html.*$/, ''),
+    church: saved.church || '',
+    email: saved.email || '',
+    deadline: saved.deadline || '',
+    post: saved.post || '',
+  };
+}
+
+for (const key of ['base', 'church', 'email', 'deadline', 'post']) {
+  $(key).value = settings[key];
+  $(key).addEventListener('input', () => {
+    settings[key] = $(key).value.trim();
+    try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch (e) { /* private mode */ }
+    renderLinks();
+    renderKiosk();
+    renderConfigNote();
+  });
+}
+
+/** Settings ride in the query string so they can be changed without a redeploy. */
+function linkQuery(extra = {}) {
+  const q = new URLSearchParams();
+  if (settings.church) q.set('c', settings.church);
+  if (settings.email) q.set('to', settings.email);
+  if (settings.deadline) q.set('by', settings.deadline);
+  if (settings.post) q.set('post', settings.post);
+  for (const [k, v] of Object.entries(extra)) q.set(k, v);
+  const s = q.toString();
+  return s ? `?${s}` : '';
+}
+
+function linkFor(record, extra) {
+  const base = (settings.base || './').split('?')[0].split('#')[0];
+  return `${base}${linkQuery(extra)}#r=${encodeRecord(record)}`;
+}
+
+function renderConfigNote() {
+  const long = records.length ? linkFor(records[0]).length : 0;
+  const bits = [];
+  if (!settings.email && !settings.post) {
+    bits.push('No office email set, so families will get a "copy this summary" screen. That works, but it puts the sending back on them.');
+  }
+  bits.push(`Putting these settings in <code>config.js</code> instead keeps the links shorter and lets you change the office email without regenerating them.`);
+  if (long > 1800) {
+    bits.push(`Your longest links are around ${long} characters. That is fine in an email, but some texting apps truncate — send a test to yourself first.`);
+  }
+  $('config-note').innerHTML = bits.join('<br><br>');
+}
+
+// --- links ----------------------------------------------------------------
+
+function linkRows() {
+  return records.map((r) => ({
+    id: r.id,
+    household: householdTitle(r),
+    people: r.people.map(personName).join('; '),
+    emails: r.people.map((p) => p.email).filter(Boolean).join('; '),
+    address: addressLine(r.address),
+    link: linkFor(r),
+  }));
+}
+
+function renderLinks() {
+  if (!records.length) { $('links').innerHTML = ''; return; }
+  const data = linkRows();
+  $('links').innerHTML =
+    `<tr><th>Household</th><th>Send to</th><th>Link</th></tr>` +
+    data.slice(0, 4).map((d) => `
+      <tr>
+        <td><strong>${escapeHtml(d.household)}</strong></td>
+        <td class="muted">${escapeHtml(d.emails || 'no email on file')}</td>
+        <td class="linkcell">${escapeHtml(d.link.slice(0, 90))}…</td>
+      </tr>`).join('') +
+    (data.length > 4 ? `<tr><td colspan="3" class="muted">…and ${data.length - 4} more in the download.</td></tr>` : '');
+}
+
+$('dl-links').addEventListener('click', () => {
+  const data = linkRows();
+  const csv = toCsv([
+    ['Record ID', 'Household', 'People', 'Emails', 'Address', 'Link'],
+    ...data.map((d) => [d.id, d.household, d.people, d.emails, d.address, d.link]),
+  ]);
+  download('directory-links.csv', csv);
+});
+
+$('copy-links').addEventListener('click', async () => {
+  const text = linkRows().map((d) => `${d.household}\t${d.emails}\t${d.link}`).join('\n');
+  try {
+    await navigator.clipboard.writeText(text);
+    flash($('copy-links'), 'Copied');
+  } catch (e) {
+    flash($('copy-links'), 'Copy failed');
+  }
+});
+
+// --- photo day ------------------------------------------------------------
+
+$('search').addEventListener('input', renderKiosk);
+
+function renderKiosk() {
+  if (!records.length) { $('kiosk').innerHTML = ''; return; }
+  const q = $('search').value.trim().toLowerCase();
+  const done = new Set(loadResponses().map((s) => s.id));
+  const matches = records.filter((r) => {
+    if (!q) return true;
+    const hay = `${householdTitle(r)} ${addressLine(r.address)} ${r.people.map(personName).join(' ')}`.toLowerCase();
+    return hay.includes(q);
+  });
+
+  $('kiosk').innerHTML =
+    `<tr><th>Household</th><th>Address</th><th></th></tr>` +
+    (matches.length
+      ? matches.map((r) => `
+        <tr>
+          <td><strong>${escapeHtml(householdTitle(r))}</strong>
+              ${done.has(r.id) ? ' <span class="pill done">done</span>' : ''}<br>
+              <span class="muted">${escapeHtml(r.people.map(personName).join(', '))}</span></td>
+          <td class="muted">${escapeHtml(addressLine(r.address) || '—')}</td>
+          <td><a class="btn" href="${escapeHtml(linkFor(r, { kiosk: '1' }))}">Open</a></td>
+        </tr>`).join('')
+      : `<tr><td colspan="3" class="muted">Nothing matches "${escapeHtml(q)}".</td></tr>`);
+}
+
+// --- responses ------------------------------------------------------------
+
+function loadResponses() {
+  try { return JSON.parse(localStorage.getItem(STORE_KEY) || '[]'); } catch (e) { return []; }
+}
+
+function renderResponses() {
+  const all = loadResponses();
+  const changed = all.filter((s) => s.changeCount > 0).length;
+  $('collected').innerHTML = all.length
+    ? `<span class="count">${all.length}</span> household${all.length === 1 ? '' : 's'} confirmed on this device — ` +
+      `<span class="count">${changed}</span> with changes, <span class="count">${all.length - changed}</span> correct as they stood.`
+    : `Nothing collected on this device yet.`;
+
+  $('dl-updates').disabled = !all.length;
+  $('dl-directory').disabled = !all.length;
+  $('clear').disabled = !all.length;
+
+  $('responses').innerHTML = all.length
+    ? `<tr><th>Household</th><th>When</th><th>Changes</th></tr>` +
+      all.slice().reverse().map((s) => `
+        <tr>
+          <td><strong>${escapeHtml(s.household)}</strong> <span class="pill">${escapeHtml(s.id)}</span></td>
+          <td class="muted">${escapeHtml(s.submittedAt)}</td>
+          <td>${s.changeCount
+            ? escapeHtml(s.changes.map((c) => c.field).join(', '))
+            : '<span class="muted">confirmed, no changes</span>'}</td>
+        </tr>`).join('')
+    : '';
+}
+
+$('dl-updates').addEventListener('click', () => download('directory-changes.csv', updatesToCsv(loadResponses())));
+$('dl-directory').addEventListener('click', () => download('directory-corrected.csv', directoryToCsv(loadResponses())));
+
+$('clear').addEventListener('click', () => {
+  const all = loadResponses();
+  if (!confirm(`Delete ${all.length} saved response${all.length === 1 ? '' : 's'} from this device? Download them first if you haven't.`)) return;
+  localStorage.removeItem(STORE_KEY);
+  renderResponses();
+  renderKiosk();
+});
+
+// Coming back from a kiosk submission should show it immediately.
+window.addEventListener('pageshow', () => { renderResponses(); renderKiosk(); });
+
+// --- odds and ends --------------------------------------------------------
+
+function download(name, text) {
+  const blob = new Blob([text], { type: 'text/csv;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function flash(btn, text) {
+  const was = btn.textContent;
+  btn.textContent = text;
+  setTimeout(() => { btn.textContent = was; }, 1400);
+}
+
+renderResponses();
+restoreRoster();
+</script>
+</body>
+</html>

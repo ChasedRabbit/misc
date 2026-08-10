@@ -190,16 +190,21 @@ function cellAt(row, idx) {
   return idx === undefined || idx === null ? '' : str(row[idx]);
 }
 
+function rowFacts(row, mapping) {
+  return {
+    id: cellAt(row, mapping.householdId),
+    surname: norm(cellAt(row, mapping.householdName) || cellAt(row, mapping.lastName)),
+    street: norm(cellAt(row, mapping.street)),
+  };
+}
+
 function householdKeyFor(row, mapping) {
-  const id = cellAt(row, mapping.householdId);
-  if (id) return `id:${norm(id)}`;
+  const f = rowFacts(row, mapping);
+  if (f.id) return `id:${norm(f.id)}`;
   // Failing an ID, a household is a surname at an address. Imperfect for two
   // families sharing a house, which is why the office sees the grouping before
   // any links are generated.
-  const name = cellAt(row, mapping.householdName) || cellAt(row, mapping.lastName);
-  const street = cellAt(row, mapping.street);
-  const key = `${norm(name)}|${norm(street)}`;
-  return key === '|' ? '' : `k:${key}`;
+  return f.surname || f.street ? `k:${f.surname}|${f.street}` : '';
 }
 
 // ---------------------------------------------------------------------------
@@ -217,9 +222,17 @@ export function buildRecords(rows, mapping, options = {}) {
   if (!data.length) return { records: [], warnings: ['The file has no data rows.'] };
 
   const groups = new Map();
+  const surnameOf = new Map();
+  const deferred = [];
   let ungrouped = 0;
 
   data.forEach((row, i) => {
+    const f = rowFacts(row, mapping);
+    // A child's row routinely carries a name and nothing else. Without an ID
+    // there is no address to group it on, so hold it back and attach it to the
+    // right family once the families with addresses are known.
+    if (!f.id && f.surname && !f.street) { deferred.push({ row, surname: f.surname }); return; }
+
     let key = householdKeyFor(row, mapping);
     if (!key) {
       // No name and no address: keep the row rather than dropping it silently,
@@ -227,12 +240,30 @@ export function buildRecords(rows, mapping, options = {}) {
       key = `row:${i}`;
       ungrouped++;
     }
-    if (!groups.has(key)) groups.set(key, []);
+    if (!groups.has(key)) { groups.set(key, []); surnameOf.set(key, f.surname); }
     groups.get(key).push(row);
   });
 
+  let ambiguous = 0;
+  for (const { row, surname } of deferred) {
+    const matches = [...groups.keys()].filter((k) => surnameOf.get(k) === surname);
+    // Exactly one family of that name: safe. Two or more, and guessing would
+    // put a child in the wrong household, which is worse than a stray record.
+    if (matches.length === 1) {
+      groups.get(matches[0]).push(row);
+      continue;
+    }
+    if (matches.length > 1) ambiguous++;
+    const key = `k:${surname}|`;
+    if (!groups.has(key)) { groups.set(key, []); surnameOf.set(key, surname); }
+    groups.get(key).push(row);
+  }
+
   if (ungrouped) {
     warnings.push(`${ungrouped} row${ungrouped === 1 ? '' : 's'} had no family name or address, so ${ungrouped === 1 ? 'it was' : 'they were'} treated as separate households.`);
+  }
+  if (ambiguous) {
+    warnings.push(`${ambiguous} row${ambiguous === 1 ? '' : 's'} had a name but no address, and more than one family shares that surname — check those households before sending links.`);
   }
 
   const records = [];

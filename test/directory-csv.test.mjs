@@ -159,6 +159,33 @@ test('without an ID column, surname plus address groups the household', () => {
   assert.equal(new Set(records.map((r) => r.id)).size, 2);
 });
 
+test("without an ID, a child's address-less row still joins the family", () => {
+  // The common shape of a per-person export: only the adults carry an address.
+  const text = [
+    'Last Name,First Name,Address,City',
+    'Fielden,Harold,1204 Oak Ridge Rd,Glen Allen',
+    'Fielden,Sarah,1204 Oak Ridge Rd,Glen Allen',
+    'Fielden,Emma,,',
+  ].join('\n');
+  const { records } = load(text);
+  assert.equal(records.length, 1, 'Emma must not become her own household');
+  assert.deepEqual(records[0].people.map((p) => p.name), ['Harold Fielden', 'Sarah Fielden', 'Emma Fielden']);
+});
+
+test('an address-less row is left alone when two families share the surname', () => {
+  // Guessing would put a child in the wrong house, which is worse than a
+  // stray record the office can see and fix.
+  const text = [
+    'Last Name,First Name,Address,City',
+    'Smith,John,12 Oak St,Ashland',
+    'Smith,Mary,88 Cedar Ln,Glen Allen',
+    'Smith,Timmy,,',
+  ].join('\n');
+  const { records, warnings } = load(text);
+  assert.equal(records.length, 3);
+  assert.ok(warnings.some((w) => /more than one family shares that surname/.test(w)));
+});
+
 test('a one-row-per-family export still produces a household', () => {
   const text = [
     'Household Name,Full Name,Address,City,State,Zip,Phone,Email',
