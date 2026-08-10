@@ -233,7 +233,7 @@
 
 <script type="module">
 import {
-  parseCsv, toCsv, guessMapping, buildRecords, looksPerPerson,
+  parseCsv, toCsv, guessMapping, groupHouseholds, contactRoutes,
   updatesToCsv, directoryToCsv, FIELD_TARGETS,
 } from './csv.js';
 import {
@@ -376,7 +376,7 @@ $('mapping').addEventListener('change', (e) => {
 // --- building -------------------------------------------------------------
 
 function rebuild() {
-  const built = buildRecords(rows, mapping);
+  const built = groupHouseholds(rows, mapping);
   records = built.records.map(normalizeRecord);
   warnings = built.warnings;
   renderWarnings();
@@ -389,7 +389,7 @@ function rebuild() {
 
 function renderWarnings() {
   $('map-warnings').innerHTML = warnings.length
-    ? `<div class="notice warn"><strong>Worth checking:</strong><ul>${warnings.map((w) => `<li>${escapeHtml(w)}</li>`).join('')}</ul></div>`
+    ? `<div class="notice warn"><strong>Worth checking:</strong><ul>${warnings.map((w) => `<li>${escapeHtml(w.message)}</li>`).join('')}</ul></div>`
     : `<div class="notice info">Nothing looks amiss.</div>`;
 }
 
@@ -407,12 +407,23 @@ function householdRow(r) {
 function renderPreview() {
   const head = `<tr><th>ID</th><th>Household</th><th>Address</th><th>Phone</th></tr>`;
   const people = records.reduce((n, r) => n + r.people.length, 0);
+  // How many can actually be sent a link is the number that decides whether
+  // this is a mail-merge job or a photo-day job, so it leads the summary.
+  const reach = records.filter((r) => contactRoutes(r).emails.length).length;
+  const none = records.filter((r) => !contactRoutes(r).reachable).length;
   $('group-summary').innerHTML =
-    `<span class="count">${records.length}</span> household${records.length === 1 ? '' : 's'}, ` +
-    `<span class="count">${people}</span> ${people === 1 ? 'person' : 'people'}` +
-    (looksPerPerson(rows, mapping) ? ' — read as one row per person.' : ' — read as one row per family.');
+    `<span class="count">${records.length}</span> household${records.length === 1 ? '' : 's'} ` +
+    `from <span class="count">${people}</span> ${people === 1 ? 'person' : 'people'}. ` +
+    `<span class="count">${reach}</span> can be emailed a link; ` +
+    `<span class="count">${none}</span> have no email or phone at all — those are the ones to catch on photo day.`;
   $('preview').innerHTML = head + records.slice(0, 5).map(householdRow).join('');
-  $('preview-all').innerHTML = head + records.map(householdRow).join('');
+  // A full table of several thousand rows makes a tablet crawl, and the
+  // photo-day search below is the better way to find one household anyway.
+  const CAP = 300;
+  $('preview-all').innerHTML = head + records.slice(0, CAP).map(householdRow).join('') +
+    (records.length > CAP
+      ? `<tr><td colspan="4" class="muted">Showing the first ${CAP} of ${records.length}. Use the photo-day search to find a particular household.</td></tr>`
+      : '');
 }
 
 // --- settings -------------------------------------------------------------

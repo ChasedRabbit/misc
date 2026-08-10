@@ -25,9 +25,9 @@ the files are ES modules, so `file://` won't work.
 
 ## How a round actually goes
 
-1. **Export** your directory to CSV. One row per person or one per family; both
-   work. Fewer columns is better — you only need names, address, phones, emails,
-   birthdays, and ideally a family ID.
+1. **Export** your directory to CSV, one row per person. You only need names,
+   address, phones, emails and birthdays. If your system can export a **family
+   or household ID, include it** — see "How households are worked out" below.
 2. **Open `admin.html`** and load the file. It guesses which column is which,
    shows you the guess, and shows you how the rows grouped into households.
    Fix anything it got wrong.
@@ -82,6 +82,49 @@ Any of these can also be overridden on a single link with a query parameter
 (`?c=`, `?to=`, `?post=`, `?by=`, `?help=`), which is what the office tool does
 while you're trying settings out. Settings in `config.js` keep the links shorter.
 
+## How households are worked out
+
+If your export has a family or household ID column, that is used and this
+section doesn't apply. Many exports don't have one — including the one this was
+built against, whose columns are:
+
+```
+First Name, Preferred Name, Last Name, Birthday, Age, Email,
+Home Phone, Cell Phone, Address, City, State, Zip Code
+```
+
+With no family ID, **the address is the only evidence of who lives with whom**,
+so people at the same address are treated as one household. Two decisions follow
+from that, and both are deliberate:
+
+- **Surnames are ignored when grouping.** Grouping on address *and* surname
+  would split every household where a spouse kept their name, or where a
+  grandparent or stepchild is under the same roof. Wrongly splitting a family is
+  more visible — and more offensive to that family — than wrongly merging two,
+  which you can spot in the review list. Mixed-surname households are counted in
+  the warnings so you can glance at them.
+- **People with no address become a household of one.** We genuinely don't know
+  who they live with, and guessing would be worse than admitting it.
+
+Addresses are matched loosely enough to survive real data: `Rd`/`Road`,
+`St`/`Street`, punctuation, and ZIP+4 against plain ZIP all group together.
+Apartment numbers keep neighbours apart. If more than eight people share one
+address it's treated as a data-entry placeholder — a church office address, say
+— and split, rather than mailing one link to a crowd.
+
+Two other things about that export shape:
+
+- **`Age` is never asked about or written back.** It's derived from `Birthday`
+  ("53 yrs"), so a stale copy would be worse than none. It's read only to sort
+  each household oldest-first, which puts parents above children without needing
+  a relationship column.
+- **`Preferred Name` is what the page shows.** Someone on file as Harold but
+  going by Hal is greeted as Hal, with a quiet "on file as Harold Fielden"
+  underneath so a wrong legal name can still be corrected.
+
+Because there's no ID to match on, the update exports always carry the **old
+value beside the new one** — that's how you find the right record to edit.
+
 ## About the data
 
 **A family's details live in their link, in the part after the `#`.** Browsers
@@ -93,8 +136,10 @@ Consequences worth knowing:
 
 - **A link is as private as the email it was sent in.** Forwarded, it exposes
   that one household — never anyone else's.
-- **Links are long** (roughly 400–900 characters). Fine in email; test a text
-  message to yourself first, as some apps truncate.
+- **Links are long.** Measured across a real 6,000-person export: about 200
+  characters of encoded data for a typical household, 900 for the largest, plus
+  your site's URL. Fine in email; test a text message to yourself first, as some
+  apps truncate.
 - **Don't commit your export.** `.gitignore` here already blocks `*.csv`.
 - The office tool holds your loaded file in `sessionStorage` — it survives
   opening a family and coming back, and is gone when the tab closes.
@@ -127,7 +172,7 @@ holds no data until you load a file — but it's not a page you'd advertise.
 ## Development
 
 ```sh
-node --test 'test/*.mjs'    # directory tests live in test/directory*.test.mjs
+node --test 'test/*.mjs'    # this tool's tests are directory.test.mjs + csv.test.mjs
 ```
 
 `directory.js` and `csv.js` are pure functions with no DOM and no fetch, which

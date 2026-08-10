@@ -14,12 +14,16 @@
 
 export const SCHEMA_VERSION = 1;
 
-/** Fields on a person, in display order, with the comparison rule for each. */
+// Names stay split into the same three columns the church export uses, rather
+// than being joined into one "name" box. A family that corrects a spelling has
+// to land back in the right column when the office re-imports, and splitting a
+// free-text name is guesswork the moment anyone has two surnames.
 export const PERSON_FIELDS = [
-  { key: 'name', label: 'Name', kind: 'text' },
-  { key: 'role', label: 'Role', kind: 'text' },
+  { key: 'first', label: 'First name', kind: 'text' },
+  { key: 'preferred', label: 'Goes by', kind: 'text' },
+  { key: 'last', label: 'Last name', kind: 'text' },
   { key: 'email', label: 'Email', kind: 'email' },
-  { key: 'mobile', label: 'Mobile', kind: 'phone' },
+  { key: 'mobile', label: 'Cell phone', kind: 'phone' },
   { key: 'birthday', label: 'Birthday', kind: 'date' },
 ];
 
@@ -72,8 +76,9 @@ export function normalizeRecord(raw) {
     note: str(r.note),
     people: people.map((p, i) => ({
       _k: str(p && p._k) || `p${i}`,
-      name: str(p && p.name),
-      role: str(p && p.role),
+      first: str(p && p.first),
+      preferred: str(p && p.preferred),
+      last: str(p && p.last),
       email: str(p && p.email),
       mobile: str(p && p.mobile),
       birthday: canonicalDate(p && p.birthday),
@@ -180,6 +185,10 @@ export function formatDate(stored) {
 
 export function formatPhone(input) {
   const s = str(input);
+  // Some entries carry a note — "615-555-0142 (Josh)", "555-0100 ext 2". The
+  // digits alone would format cleanly and silently throw the note away, so
+  // anything with letters in it is left exactly as the office typed it.
+  if (/[a-z]/i.test(s)) return s;
   const d = s.replace(/\D/g, '');
   if (d.length === 10) return `(${d.slice(0, 3)}) ${d.slice(3, 6)}-${d.slice(6)}`;
   if (d.length === 11 && d[0] === '1') return `(${d.slice(1, 4)}) ${d.slice(4, 7)}-${d.slice(7)}`;
@@ -202,15 +211,36 @@ export function addressLines(addr) {
   return [street, tail].filter(Boolean);
 }
 
+/**
+ * What to call this household at the top of the page.
+ *
+ * Three quarters of the records in a real export are a single person, and
+ * greeting a widow as "The Calloway Family" is a small unkindness the page can
+ * easily avoid — so one person is addressed by name.
+ */
 export function householdTitle(record) {
   const name = str(record && record.household);
+  const people = (record && Array.isArray(record.people)) ? record.people : [];
+  if (people.length === 1) return personName(people[0]);
   if (!name) return 'Your household';
   if (/\bfamily\b|\bhousehold\b/i.test(name)) return name;
   return `The ${name} Family`;
 }
 
+/** The name as the directory would print it: the one they actually go by. */
 export function personName(p) {
-  return str(p && p.name) || 'Unnamed person';
+  if (!p) return 'Unnamed person';
+  const given = str(p.preferred) || str(p.first);
+  return [given, str(p.last)].filter(Boolean).join(' ') || 'Unnamed person';
+}
+
+/** Shown when the printed name hides a legal first name the office holds. */
+export function formalName(p) {
+  if (!p) return '';
+  const first = str(p.first);
+  const preferred = str(p.preferred);
+  if (!preferred || sameValue(first, preferred, 'text')) return '';
+  return [first, str(p.last)].filter(Boolean).join(' ');
 }
 
 export function personSummary(p) {
@@ -220,6 +250,20 @@ export function personSummary(p) {
     p.birthday ? `b. ${formatDate(p.birthday)}` : '',
   ].filter(Boolean);
   return [personName(p), bits.join(' · ')].filter(Boolean).join(' — ');
+}
+
+/**
+ * "53 yrs" / "8 months" as the export writes it. Only used to sort a household
+ * so the adults come first — the field is derived from the birthday, so it is
+ * never shown and never asked about.
+ */
+export function parseAgeYears(input) {
+  const s = str(input).toLowerCase();
+  const m = s.match(/^(-?\d+)\s*(yrs?|years?|months?|mos?)/);
+  if (!m) return null;
+  const n = Number(m[1]);
+  if (!Number.isFinite(n)) return null;
+  return /^m/.test(m[2]) ? Math.max(0, n) / 12 : n;
 }
 
 /** Is this record so empty that there's nothing to confirm? */
@@ -247,6 +291,8 @@ export function sameValue(a, b, kind = 'text') {
   const norm = COMPARE[kind] || COMPARE.text;
   return norm(a) === norm(b);
 }
+
+const NAME_FIELDS = new Set(['first', 'preferred', 'last']);
 
 function changeKind(from, to) {
   if (!str(from)) return 'added';
@@ -321,8 +367,8 @@ export function diffRecord(before, after) {
         scope: 'person',
         key: `person:${person._k}:${f.key}`,
         label: f.label,
-        // Name changes read better against the old name.
-        person: f.key === 'name' ? personName(was) : personName(person),
+        // Name changes read better against the name we knew them by.
+        person: NAME_FIELDS.has(f.key) ? personName(was) : personName(person),
         from: fmt(was[f.key]),
         to: fmt(person[f.key]),
         kind: changeKind(was[f.key], person[f.key]),
@@ -504,7 +550,7 @@ export function packRecord(record) {
     r.phone,
     r.email,
     r.anniversary,
-    r.people.map((p) => trimTrailing([p.name, p.role, p.email, p.mobile, p.birthday])),
+    r.people.map((p) => trimTrailing([p.first, p.preferred, p.last, p.email, p.mobile, p.birthday])),
   ]);
 }
 
@@ -521,7 +567,7 @@ export function unpackRecord(packed) {
     anniversary,
     people: (Array.isArray(people) ? people : []).map((p) => {
       const q = Array.isArray(p) ? p : [];
-      return { name: q[0], role: q[1], email: q[2], mobile: q[3], birthday: q[4] };
+      return { first: q[0], preferred: q[1], last: q[2], email: q[3], mobile: q[4], birthday: q[5] };
     }),
   });
 }
@@ -564,9 +610,9 @@ export function demoRecord() {
     email: '',
     anniversary: '1998-06-13',
     people: [
-      { name: 'Harold Fielden', role: 'Head', email: 'hcfielden@example.com', mobile: '8045550143', birthday: '1971-03-04' },
-      { name: 'Sarah Fielden', role: 'Spouse', email: 'sarah@example.com', mobile: '8045550144', birthday: '1973-11-12' },
-      { name: 'Emma Fielden', role: 'Child', email: '', mobile: '', birthday: '2009-07-22' },
+      { first: 'Harold', preferred: 'Hal', last: 'Fielden', email: 'hal@example.com', mobile: '8045550143', birthday: '1971-03-04' },
+      { first: 'Sarah', preferred: '', last: 'Fielden', email: 'sarah@example.com', mobile: '8045550144', birthday: '1973-11-12' },
+      { first: 'Emma', preferred: '', last: 'Fielden', email: '', mobile: '', birthday: '2009-07-22' },
     ],
   });
 }

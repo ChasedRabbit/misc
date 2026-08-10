@@ -182,7 +182,7 @@
 import {
   normalizeRecord, cloneRecord, nextPersonKey, blankRecord, isEmptyRecord,
   decodeRecord, demoRecord, diffRecord, describeChange, formatDate, mergeDate,
-  formatPhone, addressLines, addressLine, householdTitle, personName,
+  formatPhone, addressLines, addressLine, householdTitle, personName, formalName,
   submissionText, submissionSubject, submissionPayload, mailtoUrl, escapeHtml,
 } from './directory.js';
 import { CONFIG, configFromUrl } from './config.js';
@@ -287,9 +287,10 @@ function renderRecord() {
   parts.push(section('household', 'Household contact', householdBody(), editing));
   parts.push(section('address', 'Address', addressBody(), editing));
   for (const person of working.people) {
-    // The eyebrow carries the role and the value carries the name, so neither
-    // repeats the other — and the family name is already the page heading.
-    parts.push(section(`person:${person._k}`, person.role || 'Person', personBody(person), editing));
+    // The export has no relationship column, so there is no role to label a
+    // person with. The name is the heading and the body carries the contact
+    // details, which keeps each person to one line when nothing is wrong.
+    parts.push(section(`person:${person._k}`, personName(person), personBody(person), editing));
   }
   if (editing) {
     parts.push(`<div class="add-row"><button class="link-btn" data-act="add-person">+ Add someone to this household</button></div>`);
@@ -403,23 +404,45 @@ function addressBody() {
   };
 }
 
+/** The surname to prefill when adding someone, so a new child is one field. */
+function lastNameHint() {
+  const counts = new Map();
+  for (const p of working.people) {
+    const last = (p.last || '').trim();
+    if (last) counts.set(last, (counts.get(last) || 0) + 1);
+  }
+  let best = '';
+  let bestN = 0;
+  for (const [name, n] of counts) if (n > bestN) { best = name; bestN = n; }
+  return best;
+}
+
 function personBody(p) {
   const bits = [p.email, formatPhone(p.mobile), p.birthday ? `b. ${formatDate(p.birthday)}` : ''].filter(Boolean);
   const k = escapeHtml(p._k);
+  const formal = formalName(p);
   return {
     view: `
-      ${displayOrEmpty(personName(p), 'Unnamed')}
-      ${bits.length ? `<div class="sub">${escapeHtml(bits.join(' · '))}</div>` : ''}`,
+      ${bits.length
+        ? `<div class="value">${escapeHtml(bits.join(' · '))}</div>`
+        : `<div class="value empty">No email or phone on file</div>`}
+      ${formal ? `<div class="sub">On file as ${escapeHtml(formal)}</div>` : ''}`,
     edit: `
       <div class="fields">
-        <div class="field">
-          <label for="p-${k}-name">Name</label>
-          <input id="p-${k}-name" data-person="${k}" data-field="name" value="${val(p.name)}">
+        <div class="row2">
+          <div class="field">
+            <label for="p-${k}-first">First name</label>
+            <input id="p-${k}-first" data-person="${k}" data-field="first" value="${val(p.first)}" autocomplete="given-name">
+          </div>
+          <div class="field">
+            <label for="p-${k}-last">Last name</label>
+            <input id="p-${k}-last" data-person="${k}" data-field="last" value="${val(p.last)}" autocomplete="family-name">
+          </div>
         </div>
         <div class="row2">
           <div class="field">
-            <label for="p-${k}-role">Role</label>
-            <input id="p-${k}-role" data-person="${k}" data-field="role" value="${val(p.role)}" placeholder="Head, Spouse, Child">
+            <label for="p-${k}-pref">Goes by (optional)</label>
+            <input id="p-${k}-pref" data-person="${k}" data-field="preferred" value="${val(p.preferred)}" placeholder="${val(p.first) || 'Nickname'}">
           </div>
           <div class="field">
             <label for="p-${k}-bday">Birthday</label>
@@ -431,7 +454,7 @@ function personBody(p) {
           <input id="p-${k}-email" data-person="${k}" data-field="email" type="email" inputmode="email" autocapitalize="off" value="${val(p.email)}">
         </div>
         <div class="field">
-          <label for="p-${k}-mobile">Mobile</label>
+          <label for="p-${k}-mobile">Cell phone</label>
           <input id="p-${k}-mobile" data-person="${k}" data-field="mobile" type="tel" inputmode="tel" value="${val(formatPhone(p.mobile))}">
         </div>
       </div>
@@ -554,7 +577,7 @@ el.app.addEventListener('click', (e) => {
   else if (act === 'close') { open.delete(btn.dataset.id); render(); }
   else if (act === 'add-person') {
     const key = nextPersonKey(working);
-    working.people.push({ _k: key, name: '', role: '', email: '', mobile: '', birthday: '' });
+    working.people.push({ _k: key, first: '', preferred: '', last: lastNameHint(), email: '', mobile: '', birthday: '' });
     open.add(`person:${key}`);
     render();
     focusFirst(`person:${key}`);

@@ -1,117 +1,68 @@
-// csv.js — turning a church-software export into households, and back again.
+// csv.js — turning a church-software people export into households, and
+// turning the answers back into something the office can re-import.
 //
-// Pure functions, no DOM. The office's export is the one thing this tool can't
-// control: every system names its columns differently, some put one row per
-// person and some put one row per family, and Excel in some locales writes
-// semicolons instead of commas. So the strategy is to guess well, show the
-// guess, and let a human correct it — never to require a particular format.
+// Pure functions: text in, data out. No DOM, no file API.
+//
+// This is written against a real export whose header is
+//
+//   First Name, Preferred Name, Last Name, Birthday, Age, Email,
+//   Home Phone, Cell Phone, Address, City, State, Zip Code
+//
+// which has two properties that drive most of the decisions below:
+//
+//   1. There is no household or family ID, and no relationship column. Who
+//      lives with whom has to be inferred, and the only evidence is the
+//      address. See groupHouseholds.
+//   2. Age is derived from Birthday ("53 yrs"), so it is never asked about and
+//      never written back — it would just go stale against the real birthday.
+//
+// The column mapping is still by synonym rather than by position, so a
+// different export (or a reordered one) still lands correctly, and anything it
+// gets wrong can be overridden by hand in the office page.
 
-const norm = (h) => String(h == null ? '' : h).toLowerCase().replace(/[^a-z0-9]/g, '');
+import { canonicalDate, parseAgeYears, personName, formatPhone } from './directory.js';
+
 const str = (v) => (v === null || v === undefined ? '' : String(v).trim());
-
-/**
- * Columns we know how to use. Synonyms are ordered best-first: an exact match
- * on the first synonym beats an exact match on the last, which is how "Home
- * Phone" and "Cell Phone" end up in the right slots even though both are
- * plausibly "phone".
- */
-export const FIELD_TARGETS = [
-  {
-    key: 'householdId', label: 'Family / household ID', level: 'household',
-    hint: 'Lets updates be matched back to the right record on re-import.',
-    synonyms: ['householdid', 'familyid', 'houseid', 'homeid', 'familynumber', 'envelopenumber', 'envelope', 'recordid', 'unitid', 'id'],
-  },
-  {
-    key: 'householdName', label: 'Family / household name', level: 'household',
-    synonyms: ['householdname', 'familyname', 'household', 'family', 'lastname', 'surname', 'last'],
-  },
-  {
-    key: 'street', label: 'Street address', level: 'household',
-    synonyms: ['addressline1', 'address1', 'streetaddress', 'streetline1', 'mailingaddress', 'homeaddress', 'street', 'addr1', 'address'],
-  },
-  {
-    key: 'unit', label: 'Apt / unit', level: 'household',
-    synonyms: ['addressline2', 'address2', 'streetline2', 'apartment', 'apt', 'unit', 'suite', 'addr2'],
-  },
-  { key: 'city', label: 'City', level: 'household', synonyms: ['mailingcity', 'city', 'town'] },
-  { key: 'state', label: 'State', level: 'household', synonyms: ['mailingstate', 'state', 'province', 'region', 'st'] },
-  { key: 'zip', label: 'ZIP', level: 'household', synonyms: ['mailingzip', 'zipcode', 'postalcode', 'zip', 'postal', 'postcode'] },
-  {
-    key: 'homePhone', label: 'Home phone', level: 'household',
-    synonyms: ['homephone', 'housephone', 'householdphone', 'landline', 'primaryphone', 'mainphone', 'telephone', 'phonenumber', 'phone'],
-  },
-  {
-    key: 'householdEmail', label: 'Household email', level: 'household',
-    synonyms: ['householdemail', 'familyemail'],
-  },
-  {
-    key: 'anniversary', label: 'Anniversary', level: 'household',
-    synonyms: ['weddinganniversary', 'anniversary', 'weddingdate', 'marriagedate'],
-  },
-  { key: 'fullName', label: 'Full name', level: 'person', synonyms: ['fullname', 'displayname', 'personname', 'membername', 'name'] },
-  { key: 'firstName', label: 'First name', level: 'person', synonyms: ['firstname', 'givenname', 'preferredname', 'goesby', 'nickname', 'first'] },
-  { key: 'lastName', label: 'Last name', level: 'person', synonyms: ['lastname', 'surname', 'familyname', 'last'] },
-  {
-    key: 'role', label: 'Role / relationship', level: 'person',
-    synonyms: ['familyrelationship', 'householdrole', 'relationship', 'familyrole', 'memberrole', 'familyposition', 'role', 'relation', 'position'],
-  },
-  { key: 'email', label: 'Email', level: 'person', synonyms: ['emailaddress', 'primaryemail', 'personalemail', 'email'] },
-  {
-    key: 'mobile', label: 'Mobile', level: 'person',
-    synonyms: ['mobilephone', 'cellphone', 'cellularphone', 'mobilenumber', 'textnumber', 'mobile', 'cell'],
-  },
-  { key: 'birthday', label: 'Birthday', level: 'person', synonyms: ['dateofbirth', 'birthdate', 'birthday', 'dob', 'born'] },
-];
 
 // ---------------------------------------------------------------------------
 // Reading and writing CSV
 // ---------------------------------------------------------------------------
 
-/** Excel writes semicolons in some locales, and exports are sometimes tabs. */
+/** Excel in some locales writes semicolons; exports occasionally use tabs. */
 export function detectDelimiter(text) {
-  const firstLine = String(text || '').replace(/^﻿/, '').split(/\r?\n/)[0] || '';
-  let best = ',';
-  let bestCount = -1;
-  for (const d of [',', ';', '\t', '|']) {
-    // Count only outside quotes, so a comma inside "Smith, John" doesn't win.
-    let count = 0;
-    let inQuotes = false;
-    for (let i = 0; i < firstLine.length; i++) {
-      const c = firstLine[i];
-      if (c === '"') inQuotes = !inQuotes;
-      else if (c === d && !inQuotes) count++;
-    }
-    if (count > bestCount) { bestCount = count; best = d; }
-  }
-  return best;
+  const firstLine = String(text).replace(/^﻿/, '').split(/\r?\n/, 1)[0] || '';
+  const counts = [',', ';', '\t'].map((d) => [d, firstLine.split(d).length - 1]);
+  counts.sort((a, b) => b[1] - a[1]);
+  return counts[0][1] > 0 ? counts[0][0] : ',';
 }
 
 /**
- * RFC 4180-ish: quoted fields, doubled quotes, embedded commas and newlines,
- * CRLF, and a BOM from Excel. Values are trimmed — leading spaces in a church
- * export are always accidental.
+ * A real CSV reader: quoted fields, embedded commas and newlines, doubled
+ * quotes, CRLF, and a UTF-8 BOM. Values are trimmed, which is what you want
+ * for directory data and would be wrong for almost anything else.
  */
 export function parseCsv(text, delimiter) {
-  const s = String(text || '').replace(/^﻿/, '');
-  if (!s.trim()) return [];
-  const d = delimiter || detectDelimiter(s);
+  if (typeof text !== 'string') return [];
+  const s = text.replace(/^﻿/, '');
+  const delim = delimiter || detectDelimiter(s);
 
   const rows = [];
   let row = [];
   let field = '';
-  let inQuotes = false;
+  let quoted = false;
 
   for (let i = 0; i < s.length; i++) {
     const c = s[i];
-    if (inQuotes) {
+    if (quoted) {
       if (c === '"') {
-        if (s[i + 1] === '"') { field += '"'; i++; }
-        else inQuotes = false;
-      } else field += c;
+        if (s[i + 1] === '"') { field += '"'; i++; } else { quoted = false; }
+      } else {
+        field += c;
+      }
       continue;
     }
-    if (c === '"') { inQuotes = true; continue; }
-    if (c === d) { row.push(field); field = ''; continue; }
+    if (c === '"') { quoted = true; continue; }
+    if (c === delim) { row.push(field); field = ''; continue; }
     if (c === '\r') continue;
     if (c === '\n') { row.push(field); rows.push(row); row = []; field = ''; continue; }
     field += c;
@@ -124,285 +75,431 @@ export function parseCsv(text, delimiter) {
 }
 
 export function toCsv(rows) {
-  return rows.map((row) => row.map(cell).join(',')).join('\r\n');
-
-  function cell(v) {
-    const s = str(v);
-    return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
-  }
+  return rows
+    .map((row) => row
+      .map((cell) => {
+        const v = cell === null || cell === undefined ? '' : String(cell);
+        return /[",\r\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
+      })
+      .join(','))
+    .join('\r\n');
 }
 
 // ---------------------------------------------------------------------------
-// Guessing which column is which
+// Column mapping
 // ---------------------------------------------------------------------------
 
+const normHeader = (h) => str(h).toLowerCase().replace(/[^a-z0-9]/g, '');
+
 /**
- * Assign headers to fields, best match first, each header used at most once.
+ * Synonyms are ordered best-first; the position is the score, so "cellphone"
+ * beats "phone" for the mobile column even though both appear in the list.
+ */
+export const FIELD_TARGETS = [
+  { key: 'first', label: 'First name', level: 'person', required: true,
+    synonyms: ['firstname', 'first', 'givenname', 'legalfirstname', 'fname'] },
+  { key: 'preferred', label: 'Goes by', level: 'person',
+    synonyms: ['preferredname', 'preferred', 'nickname', 'goesby', 'knownas', 'displayname'] },
+  { key: 'last', label: 'Last name', level: 'person',
+    synonyms: ['lastname', 'last', 'surname', 'familyname', 'lname'] },
+  { key: 'birthday', label: 'Birthday', level: 'person',
+    synonyms: ['birthday', 'birthdate', 'dateofbirth', 'dob', 'born', 'birth'] },
+  { key: 'age', label: 'Age (sorting only)', level: 'person',
+    synonyms: ['age', 'currentage'] },
+  { key: 'email', label: 'Email', level: 'person',
+    synonyms: ['email', 'emailaddress', 'primaryemail', 'personalemail', 'emailaddress1'] },
+  { key: 'mobile', label: 'Cell phone', level: 'person',
+    synonyms: ['cellphone', 'cell', 'mobilephone', 'mobile', 'cellular', 'textnumber', 'mobilenumber'] },
+  { key: 'homePhone', label: 'Home phone', level: 'household',
+    synonyms: ['homephone', 'householdphone', 'housephone', 'landline', 'homephonenumber', 'phone', 'primaryphone', 'telephone', 'phonenumber'] },
+  { key: 'street', label: 'Address', level: 'household',
+    synonyms: ['address', 'addressline1', 'address1', 'streetaddress', 'street', 'mailingaddress', 'homeaddress', 'addr1'] },
+  { key: 'unit', label: 'Apt / unit', level: 'household',
+    synonyms: ['addressline2', 'address2', 'apt', 'apartment', 'unit', 'suite', 'addr2'] },
+  { key: 'city', label: 'City', level: 'household',
+    synonyms: ['city', 'town', 'mailingcity'] },
+  { key: 'state', label: 'State', level: 'household',
+    synonyms: ['state', 'province', 'region', 'mailingstate', 'st'] },
+  { key: 'zip', label: 'ZIP', level: 'household',
+    synonyms: ['zipcode', 'zip', 'postalcode', 'postal', 'zip5', 'mailingzip'] },
+  { key: 'householdId', label: 'Household ID', level: 'household',
+    synonyms: ['householdid', 'familyid', 'houseid', 'envelopenumber', 'envelope', 'familynumber', 'recordid', 'memberid', 'id'] },
+  { key: 'householdName', label: 'Household name', level: 'household',
+    synonyms: ['householdname', 'familyname', 'household', 'family'] },
+];
+
+/**
+ * Best-guess column assignment. Greedy over (target, header) pairs sorted by
+ * how specific the match is, so each header is claimed once and the most
+ * confident matches win — "Last Name" goes to the person's surname rather than
+ * to the household name, which also lists 'familyname'.
  *
- * Greedy on match quality rather than on column order, so a file with both
- * "Phone" and "Home Phone" gives "Home Phone" to homePhone — the exact synonym
- * hit outranks the looser one no matter which column comes first.
- *
- * @returns {Object} field key -> column index (only for fields it's confident about)
+ * @returns {Object<string, number>} target key -> column index
  */
 export function guessMapping(headers) {
-  const cols = (headers || []).map(norm);
-  const candidates = [];
-
-  for (const target of FIELD_TARGETS) {
-    for (let i = 0; i < cols.length; i++) {
-      if (!cols[i]) continue;
-      const rank = target.synonyms.indexOf(cols[i]);
-      if (rank >= 0) {
-        candidates.push({ field: target.key, col: i, score: 1000 - rank });
-        continue;
-      }
-      // Substring fallback: "Primary Home Phone" contains "homephone".
-      const hit = target.synonyms.findIndex((syn) => syn.length >= 4 && cols[i].includes(syn));
-      if (hit >= 0) candidates.push({ field: target.key, col: i, score: 500 - hit });
+  const scored = [];
+  headers.forEach((h, i) => {
+    const n = normHeader(h);
+    if (!n) return;
+    for (const target of FIELD_TARGETS) {
+      const rank = target.synonyms.indexOf(n);
+      if (rank >= 0) scored.push({ target: target.key, index: i, score: rank });
     }
-  }
-
-  candidates.sort((a, b) => b.score - a.score || a.col - b.col);
+  });
+  scored.sort((a, b) => a.score - b.score);
 
   const mapping = {};
-  const usedCols = new Set();
-  for (const c of candidates) {
-    if (mapping[c.field] !== undefined || usedCols.has(c.col)) continue;
-    mapping[c.field] = c.col;
-    usedCols.add(c.col);
+  const usedColumns = new Set();
+  for (const s of scored) {
+    if (mapping[s.target] !== undefined || usedColumns.has(s.index)) continue;
+    mapping[s.target] = s.index;
+    usedColumns.add(s.index);
   }
   return mapping;
 }
 
-/** Does this export put each person on their own row? */
-export function looksPerPerson(rows, mapping) {
-  if (rows.length < 3) return false;
-  const hasPersonName = mapping.fullName !== undefined || mapping.firstName !== undefined;
-  if (!hasPersonName) return false;
-  const keys = rows.slice(1).map((r) => householdKeyFor(r, mapping));
-  const unique = new Set(keys.filter(Boolean));
-  // Fewer households than rows means rows are being grouped.
-  return unique.size > 0 && unique.size < keys.length;
+// ---------------------------------------------------------------------------
+// Cleanups worth doing on the way in
+// ---------------------------------------------------------------------------
+
+const STATES = {
+  alabama: 'AL', alaska: 'AK', arizona: 'AZ', arkansas: 'AR', california: 'CA',
+  colorado: 'CO', connecticut: 'CT', delaware: 'DE', florida: 'FL', georgia: 'GA',
+  hawaii: 'HI', idaho: 'ID', illinois: 'IL', indiana: 'IN', iowa: 'IA',
+  kansas: 'KS', kentucky: 'KY', louisiana: 'LA', maine: 'ME', maryland: 'MD',
+  massachusetts: 'MA', michigan: 'MI', minnesota: 'MN', mississippi: 'MS',
+  missouri: 'MO', montana: 'MT', nebraska: 'NE', nevada: 'NV',
+  newhampshire: 'NH', newjersey: 'NJ', newmexico: 'NM', newyork: 'NY',
+  northcarolina: 'NC', northdakota: 'ND', ohio: 'OH', oklahoma: 'OK',
+  oregon: 'OR', pennsylvania: 'PA', rhodeisland: 'RI', southcarolina: 'SC',
+  southdakota: 'SD', tennessee: 'TN', texas: 'TX', utah: 'UT', vermont: 'VT',
+  virginia: 'VA', washington: 'WA', westvirginia: 'WV', wisconsin: 'WI',
+  wyoming: 'WY', districtofcolumbia: 'DC',
+};
+
+/** "Tennessee" and "TN" are the same state; the directory should print one. */
+export function normalizeState(value) {
+  const s = str(value);
+  if (!s) return '';
+  if (/^[A-Za-z]{2}$/.test(s)) return s.toUpperCase();
+  const key = s.toLowerCase().replace(/[^a-z]/g, '');
+  return STATES[key] || s;
 }
 
-function cellAt(row, idx) {
-  return idx === undefined || idx === null ? '' : str(row[idx]);
+/** ZIP+4 and stray ".0" from spreadsheet round trips. */
+export function normalizeZip(value) {
+  const s = str(value).replace(/\.0$/, '');
+  const m = s.match(/^(\d{5})(?:[-\s]?(\d{4}))?$/);
+  if (!m) return s;
+  return m[2] ? `${m[1]}-${m[2]}` : m[1];
 }
 
-function rowFacts(row, mapping) {
+/** The key households are grouped on. Address only — see groupHouseholds. */
+export function addressKey(row) {
+  // ZIP+4 is per-delivery-point and gets filled in unevenly across a family's
+  // rows, so only the five-digit ZIP takes part in the key. Otherwise one
+  // member whose record carries the +4 is silently split into their own
+  // household — which is exactly the mistake a family would notice.
+  const zip5 = str(row.zip).replace(/\D/g, '').slice(0, 5);
+  const parts = [row.street, row.unit, row.city, zip5]
+    .map((v) => str(v).toLowerCase())
+    .join(' ');
+  // Fold the usual abbreviations so "123 Oak St." and "123 Oak Street" meet.
+  const folded = parts
+    .replace(/\b(street|str)\b/g, 'st')
+    .replace(/\b(avenue|ave)\b/g, 'av')
+    .replace(/\b(road)\b/g, 'rd')
+    .replace(/\b(drive)\b/g, 'dr')
+    .replace(/\b(lane)\b/g, 'ln')
+    .replace(/\b(court)\b/g, 'ct')
+    .replace(/\b(circle|cir)\b/g, 'cr')
+    .replace(/\b(boulevard|blvd)\b/g, 'bl')
+    .replace(/\b(place)\b/g, 'pl')
+    .replace(/\b(apartment|apt|unit|suite|ste)\b/g, '#')
+    .replace(/\b(north|n)\b/g, 'n')
+    .replace(/\b(south|s)\b/g, 's')
+    .replace(/\b(east|e)\b/g, 'e')
+    .replace(/\b(west|w)\b/g, 'w');
+  return folded.replace(/[^a-z0-9#]/g, '');
+}
+
+/**
+ * A short, stable ID derived from the address, so an update can be matched
+ * back to the right entry in an export that has no ID column of its own. It is
+ * computed from the address as it was when the link went out, and carried
+ * unchanged in the link — so a family that moves still comes back matchable.
+ */
+export function householdId(key) {
+  let h = 2166136261;
+  for (let i = 0; i < key.length; i++) {
+    h ^= key.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return `H-${(h >>> 0).toString(36).toUpperCase().padStart(7, '0')}`;
+}
+
+// ---------------------------------------------------------------------------
+// Rows -> households
+// ---------------------------------------------------------------------------
+
+function readRow(row, mapping) {
+  const get = (key) => {
+    const i = mapping[key];
+    return i === undefined || i < 0 ? '' : str(row[i]);
+  };
   return {
-    id: cellAt(row, mapping.householdId),
-    surname: norm(cellAt(row, mapping.householdName) || cellAt(row, mapping.lastName)),
-    street: norm(cellAt(row, mapping.street)),
+    first: get('first'),
+    preferred: get('preferred'),
+    last: get('last'),
+    birthday: get('birthday'),
+    age: get('age'),
+    email: get('email'),
+    mobile: get('mobile'),
+    homePhone: get('homePhone'),
+    street: get('street'),
+    unit: get('unit'),
+    city: get('city'),
+    state: normalizeState(get('state')),
+    zip: normalizeZip(get('zip')),
+    householdId: get('householdId'),
+    householdName: get('householdName'),
   };
 }
 
-function householdKeyFor(row, mapping) {
-  const f = rowFacts(row, mapping);
-  if (f.id) return `id:${norm(f.id)}`;
-  // Failing an ID, a household is a surname at an address. Imperfect for two
-  // families sharing a house, which is why the office sees the grouping before
-  // any links are generated.
-  return f.surname || f.street ? `k:${f.surname}|${f.street}` : '';
+/** The most common non-empty value, so one bad row can't rename a household. */
+function commonest(values) {
+  const counts = new Map();
+  for (const v of values) {
+    const s = str(v);
+    if (!s) continue;
+    counts.set(s, (counts.get(s) || 0) + 1);
+  }
+  let best = '';
+  let bestN = 0;
+  for (const [v, n] of counts) if (n > bestN) { best = v; bestN = n; }
+  return best;
 }
 
-// ---------------------------------------------------------------------------
-// Building households
-// ---------------------------------------------------------------------------
-
 /**
- * @returns {{records: Array, warnings: string[]}}
+ * Group people into households.
+ *
+ * With no family ID in the export, the address is the only evidence available,
+ * and it is used on its own rather than combined with the surname. That is a
+ * deliberate trade: grouping on address+surname would split every household
+ * where a spouse kept their name, or where a grandparent or a stepchild is
+ * under the same roof — about 130 addresses here — and wrongly splitting a
+ * family is far more visible and more offensive to the family than wrongly
+ * merging two, which the office can spot in the review list.
+ *
+ * People with no address can't be grouped at all, so each becomes a household
+ * of one. That is honest: we genuinely don't know who they live with.
  */
-export function buildRecords(rows, mapping, options = {}) {
-  const warnings = [];
-  if (!rows || rows.length < 2) return { records: [], warnings: ['The file has no data rows.'] };
-
-  const data = rows.slice(1).filter((r) => r.some((v) => str(v) !== ''));
-  if (!data.length) return { records: [], warnings: ['The file has no data rows.'] };
-
+export function groupHouseholds(rows, mapping, options = {}) {
+  const { maxHouseholdSize = 8 } = options;
+  const dataRows = rows.slice(1);
   const groups = new Map();
-  const surnameOf = new Map();
-  const deferred = [];
-  let ungrouped = 0;
+  const loners = [];
+  const warnings = [];
+  let skipped = 0;
 
-  data.forEach((row, i) => {
-    const f = rowFacts(row, mapping);
-    // A child's row routinely carries a name and nothing else. Without an ID
-    // there is no address to group it on, so hold it back and attach it to the
-    // right family once the families with addresses are known.
-    if (!f.id && f.surname && !f.street) { deferred.push({ row, surname: f.surname }); return; }
+  for (const raw of dataRows) {
+    if (!raw || raw.every((v) => str(v) === '')) { skipped++; continue; }
+    const row = readRow(raw, mapping);
+    if (!row.first && !row.last) { skipped++; continue; }
 
-    let key = householdKeyFor(row, mapping);
-    if (!key) {
-      // No name and no address: keep the row rather than dropping it silently,
-      // but it can only ever be its own household.
-      key = `row:${i}`;
-      ungrouped++;
-    }
-    if (!groups.has(key)) { groups.set(key, []); surnameOf.set(key, f.surname); }
+    const explicit = str(row.householdId);
+    const key = explicit || addressKey(row);
+    if (!key) { loners.push(row); continue; }
+    if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(row);
-  });
-
-  let ambiguous = 0;
-  for (const { row, surname } of deferred) {
-    const matches = [...groups.keys()].filter((k) => surnameOf.get(k) === surname);
-    // Exactly one family of that name: safe. Two or more, and guessing would
-    // put a child in the wrong household, which is worse than a stray record.
-    if (matches.length === 1) {
-      groups.get(matches[0]).push(row);
-      continue;
-    }
-    if (matches.length > 1) ambiguous++;
-    const key = `k:${surname}|`;
-    if (!groups.has(key)) { groups.set(key, []); surnameOf.set(key, surname); }
-    groups.get(key).push(row);
-  }
-
-  if (ungrouped) {
-    warnings.push(`${ungrouped} row${ungrouped === 1 ? '' : 's'} had no family name or address, so ${ungrouped === 1 ? 'it was' : 'they were'} treated as separate households.`);
-  }
-  if (ambiguous) {
-    warnings.push(`${ambiguous} row${ambiguous === 1 ? '' : 's'} had a name but no address, and more than one family shares that surname — check those households before sending links.`);
   }
 
   const records = [];
-  let n = 0;
+  const push = (key, members) => records.push(buildRecord(key, members));
 
-  for (const rowsFor of groups.values()) {
-    n++;
-    const first = rowsFor[0];
-    // Household details can be blank on a child's row, so take the first row
-    // that actually carries each one.
-    const pick = (field) => {
-      for (const r of rowsFor) {
-        const v = cellAt(r, mapping[field]);
-        if (v) return v;
-      }
-      return '';
-    };
-
-    const lastNames = rowsFor.map((r) => cellAt(r, mapping.lastName)).filter(Boolean);
-    const household = pick('householdName') || lastNames[0] || '';
-
-    const people = [];
-    for (const r of rowsFor) {
-      const full = cellAt(r, mapping.fullName);
-      const firstName = cellAt(r, mapping.firstName);
-      const lastName = cellAt(r, mapping.lastName);
-      const name = full || [firstName, lastName].filter(Boolean).join(' ');
-      if (!name) continue;
-      people.push({
-        name: tidyName(name),
-        role: cellAt(r, mapping.role),
-        email: cellAt(r, mapping.email),
-        mobile: cellAt(r, mapping.mobile),
-        birthday: cellAt(r, mapping.birthday),
+  for (const [key, members] of groups) {
+    // An "address" shared by a crowd is usually a data-entry placeholder — a
+    // church office address, or a blank normalised to the same string — not
+    // one household. Split it rather than mail one link to forty people.
+    if (members.length > maxHouseholdSize) {
+      warnings.push({
+        kind: 'oversized',
+        count: members.length,
+        address: [members[0].street, members[0].city].filter(Boolean).join(', '),
+        message: `${members.length} people share one address — split into separate households for safety.`,
       });
+      for (const m of members) push(`${key}|${m.first}${m.last}`, [m]);
+      continue;
     }
+    push(key, members);
+  }
+  for (const m of loners) push(`noaddr|${m.first}${m.last}${m.email}`, [m]);
 
-    records.push({
-      id: cellAt(first, mapping.householdId) || `H${String(n).padStart(4, '0')}`,
-      household,
-      address: {
-        street: pick('street'),
-        unit: pick('unit'),
-        city: pick('city'),
-        state: pick('state'),
-        zip: pick('zip'),
-      },
-      phone: pick('homePhone'),
-      email: pick('householdEmail'),
-      anniversary: pick('anniversary'),
-      people: dedupePeople(people),
+  if (loners.length) {
+    warnings.push({
+      kind: 'no-address',
+      count: loners.length,
+      message: `${loners.length} people have no address on file, so each is listed on their own.`,
     });
   }
+  if (skipped) {
+    warnings.push({ kind: 'skipped', count: skipped, message: `${skipped} rows skipped (no name).` });
+  }
 
-  const noAddress = records.filter((r) => !r.address.street).length;
-  if (noAddress) {
-    warnings.push(`${noAddress} household${noAddress === 1 ? ' has' : 's have'} no street address on file. The form will ask for one.`);
+  // Two people with the same name, no address and no email hash to the same
+  // ID. That is rare but real, and a duplicate ID would send both families'
+  // updates to the same record — so uniqueness is enforced rather than hoped
+  // for. Order comes from the file, so regenerating links gives the same IDs.
+  const seenIds = new Set();
+  for (const r of records) {
+    if (!seenIds.has(r.id)) { seenIds.add(r.id); continue; }
+    let n = 2;
+    let candidate = `${r.id}-${n}`;
+    while (seenIds.has(candidate)) candidate = `${r.id}-${++n}`;
+    r.id = candidate;
+    seenIds.add(candidate);
   }
-  const noPeople = records.filter((r) => r.people.length === 0).length;
-  if (noPeople) {
-    warnings.push(`${noPeople} household${noPeople === 1 ? ' has' : 's have'} no names attached — check the name columns are mapped.`);
-  }
-  if (mapping.householdId === undefined) {
-    warnings.push('No family ID column was found, so households were grouped by surname and address and given generated IDs. Mapping a real ID column makes re-importing the updates much easier.');
+
+  const mixed = records.filter((r) => r.surnames.length > 1).length;
+  if (mixed) {
+    warnings.push({
+      kind: 'mixed-surnames',
+      count: mixed,
+      message: `${mixed} households contain more than one surname — worth a glance before sending.`,
+    });
   }
 
   return { records, warnings };
 }
 
-/** "SMITH, John" and "Smith,John" are the same person listed twice. */
-function dedupePeople(people) {
-  const seen = new Map();
-  for (const p of people) {
-    const key = norm(p.name);
-    const existing = seen.get(key);
-    if (!existing) { seen.set(key, p); continue; }
-    // Keep whichever copy carries more detail.
-    for (const f of ['role', 'email', 'mobile', 'birthday']) {
-      if (!existing[f] && p[f]) existing[f] = p[f];
-    }
-  }
-  return [...seen.values()];
+function buildRecord(key, members) {
+  const sorted = members.slice().sort((a, b) => {
+    // Oldest first, which puts parents above children without needing a
+    // relationship column. Anyone with no age keeps their original order.
+    const ay = parseAgeYears(a.age);
+    const by = parseAgeYears(b.age);
+    if (ay === null && by === null) return 0;
+    if (ay === null) return 1;
+    if (by === null) return -1;
+    return by - ay;
+  });
+
+  const surnames = [...new Set(sorted.map((m) => str(m.last)).filter(Boolean))];
+  const explicitName = commonest(sorted.map((m) => m.householdName));
+  // A handful of rows carry no surname at all; fall back to what we do know
+  // rather than leaving a household with no name on the page.
+  const household = explicitName || surnames.join(' & ') || personName(sorted[0]);
+
+  const first = sorted[0] || {};
+  const address = {
+    street: commonest(sorted.map((m) => m.street)) || str(first.street),
+    unit: commonest(sorted.map((m) => m.unit)),
+    city: commonest(sorted.map((m) => m.city)),
+    state: commonest(sorted.map((m) => m.state)),
+    zip: commonest(sorted.map((m) => m.zip)),
+  };
+
+  const id = commonest(sorted.map((m) => m.householdId)) || householdId(key);
+
+  return {
+    id,
+    household,
+    surnames,
+    address,
+    phone: commonest(sorted.map((m) => m.homePhone)),
+    email: '',
+    anniversary: '',
+    people: sorted.map((m, i) => ({
+      _k: `p${i}`,
+      first: m.first,
+      preferred: m.preferred,
+      last: m.last,
+      email: m.email,
+      mobile: m.mobile,
+      birthday: canonicalDate(m.birthday),
+    })),
+    note: '',
+  };
 }
 
-/** Exports often carry "Smith, John" — flip it, and fix shouted names. */
-export function tidyName(raw) {
-  let name = str(raw).replace(/\s+/g, ' ');
-  const m = name.match(/^([^,]+),\s*(.+)$/);
-  if (m) name = `${m[2]} ${m[1]}`;
-  // Only touch the case when the whole name is shouted or whispered — a name
-  // the office typed as "Mary Jo VanDyke" is deliberate and must survive.
-  if (name === name.toUpperCase() || name === name.toLowerCase()) {
-    name = name.toLowerCase()
-      .replace(/\b[a-z]/g, (c) => c.toUpperCase())
-      .replace(/\bMc([a-z])/g, (_, c) => `Mc${c.toUpperCase()}`);
-  }
-  return name.trim();
+/** Where a link can be sent, and by which route. */
+export function contactRoutes(record) {
+  const emails = [...new Set(record.people.map((p) => str(p.email)).filter(Boolean))];
+  const mobiles = [...new Set(record.people.map((p) => str(p.mobile)).filter(Boolean))];
+  const phones = [...new Set([str(record.phone), ...mobiles].filter(Boolean))];
+  return { emails, mobiles, phones, reachable: emails.length > 0 || phones.length > 0 };
 }
 
 // ---------------------------------------------------------------------------
 // Exports back out
 // ---------------------------------------------------------------------------
 
-/** One row per reported change — what the office works through by hand. */
+const UPDATE_HEADER = [
+  'Household ID', 'Household', 'Submitted', 'Change count',
+  'Person', 'Field', 'Was', 'Now', 'Kind', 'Note',
+];
+
+/**
+ * One row per change, with the old value beside the new one. The "was" column
+ * is what makes this usable against an export that has no ID: it is how the
+ * office finds the right record to edit.
+ */
 export function updatesToCsv(submissions) {
-  const rows = [['Record ID', 'Household', 'Submitted', 'Field', 'Was', 'Now', 'Type', 'Note']];
+  const rows = [UPDATE_HEADER];
   for (const s of submissions) {
-    if (!s.changes.length) {
-      rows.push([s.id, s.household, s.submittedAt, '(confirmed, no changes)', '', '', 'confirmed', s.note || '']);
+    if (!s.changes || s.changes.length === 0) {
+      rows.push([s.id, s.household, s.submittedAt, 0, '', 'CONFIRMED — no changes', '', '', 'confirmed', s.note || '']);
       continue;
     }
-    s.changes.forEach((c, i) => {
-      rows.push([s.id, s.household, s.submittedAt, c.field, c.was, c.now, c.kind, i === 0 ? (s.note || '') : '']);
-    });
+    for (const c of s.changes) {
+      const [person, field] = c.field.includes(' — ') ? c.field.split(' — ') : ['', c.field];
+      rows.push([s.id, s.household, s.submittedAt, s.changes.length, person, field, c.was, c.now, c.kind, s.note || '']);
+    }
   }
   return toCsv(rows);
 }
 
-/** One row per person, corrected — the file to re-import. */
-export function directoryToCsv(submissions) {
-  const rows = [[
-    'Record ID', 'Household', 'Street', 'Apt/Unit', 'City', 'State', 'ZIP',
-    'Home Phone', 'Household Email', 'Anniversary',
-    'Name', 'Role', 'Email', 'Mobile', 'Birthday', 'Submitted',
-  ]];
-  for (const s of submissions) {
-    const r = s.record || {};
-    const a = r.address || {};
-    const head = [
-      s.id, r.household || '', a.street || '', a.unit || '', a.city || '', a.state || '', a.zip || '',
-      r.phone || '', r.email || '', r.anniversary || '',
-    ];
-    if (!r.people || !r.people.length) {
-      rows.push([...head, '', '', '', '', '', s.submittedAt]);
-      continue;
-    }
+const DIRECTORY_HEADER = [
+  'Household ID', 'First Name', 'Preferred Name', 'Last Name', 'Birthday',
+  'Email', 'Home Phone', 'Cell Phone', 'Address', 'Apt', 'City', 'State', 'Zip Code',
+  'Confirmed', 'Submitted',
+];
+
+/**
+ * The corrected directory, one row per person, in the shape the export came
+ * in. Age is deliberately absent: it is derived from the birthday, and writing
+ * a stale one back would be worse than leaving the system to recompute it.
+ */
+export function directoryToCsv(records, status = {}) {
+  const rows = [DIRECTORY_HEADER];
+  for (const r of records) {
+    const st = status[r.id] || {};
     for (const p of r.people) {
-      rows.push([...head, p.name || '', p.role || '', p.email || '', p.mobile || '', p.birthday || '', s.submittedAt]);
+      rows.push([
+        r.id, p.first, p.preferred, p.last, p.birthday,
+        p.email, formatPhone(r.phone), formatPhone(p.mobile),
+        r.address.street, r.address.unit, r.address.city, r.address.state, r.address.zip,
+        st.confirmed ? 'yes' : '', st.submittedAt || '',
+      ]);
     }
+  }
+  return toCsv(rows);
+}
+
+/** The mail-merge sheet: one row per household, with its personal link. */
+export function linksToCsv(records, baseUrl, buildLink) {
+  const rows = [['Household ID', 'Household', 'People', 'Address', 'Emails', 'Phones', 'Link']];
+  for (const r of records) {
+    const routes = contactRoutes(r);
+    rows.push([
+      r.id,
+      r.household,
+      r.people.map(personName).join('; '),
+      [r.address.street, r.address.city, r.address.state, r.address.zip].filter(Boolean).join(', '),
+      routes.emails.join('; '),
+      routes.phones.map(formatPhone).join('; '),
+      buildLink(baseUrl, r),
+    ]);
   }
   return toCsv(rows);
 }
