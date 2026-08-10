@@ -1,0 +1,752 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<meta name="robots" content="noindex">
+<title>Directory update</title>
+<meta name="description" content="Check the details we have on file for your household, and change only what's wrong.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ctext y='26' font-size='26'%3E%F0%9F%93%92%3C/text%3E%3C/svg%3E">
+<style>
+  :root {
+    color-scheme: light;
+    --surface-1: #ffffff;
+    --plane: #f6f5f2;
+    --text-primary: #14140f;
+    --text-secondary: #55534c;
+    --text-muted: #8a877e;
+    --border: rgba(20, 20, 15, 0.12);
+    --grid: #e6e4dd;
+    --accent: #2f6d4f;
+    --accent-text: #ffffff;
+    --changed: #8a5a10;
+    --changed-bg: #fdf5e6;
+    --danger: #a8341f;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) {
+      color-scheme: dark;
+      --surface-1: #1c1c1a;
+      --plane: #101010;
+      --text-primary: #f7f7f4;
+      --text-secondary: #c2c0b6;
+      --text-muted: #8a877e;
+      --border: rgba(255, 255, 255, 0.13);
+      --grid: #2e2e2b;
+      --accent: #4c9a72;
+      --accent-text: #06130d;
+      --changed: #e5b768;
+      --changed-bg: #2a2417;
+      --danger: #e08573;
+    }
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    background: var(--plane);
+    color: var(--text-primary);
+    font: 17px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif;
+    -webkit-text-size-adjust: 100%;
+  }
+  .wrap { max-width: 640px; margin: 0 auto; padding: 12px 16px 140px; }
+
+  header { padding: 14px 0 6px; }
+  .church { font-size: 13px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-muted); }
+  h1 { font-size: 25px; font-weight: 650; margin: 4px 0 0; letter-spacing: -0.02em; }
+  .lede { color: var(--text-secondary); margin: 10px 0 4px; font-size: 16px; }
+  .deadline { font-weight: 600; color: var(--text-primary); }
+
+  .card {
+    background: var(--surface-1); border: 1px solid var(--border);
+    border-radius: 16px; padding: 4px 16px; margin: 16px 0;
+  }
+  .section { border-top: 1px solid var(--grid); padding: 14px 0; }
+  .section:first-child { border-top: none; }
+  .section.is-changed { background: var(--changed-bg); margin: 0 -16px; padding: 14px 16px; }
+  .section.is-changed + .section { border-top-color: transparent; }
+
+  .section-head { display: flex; align-items: baseline; gap: 10px; }
+  .label {
+    flex: 1; font-size: 12.5px; font-weight: 600; letter-spacing: 0.07em;
+    text-transform: uppercase; color: var(--text-muted);
+  }
+  .value { font-size: 17px; margin-top: 3px; }
+  .value.empty { color: var(--text-muted); font-style: italic; }
+  .sub { color: var(--text-secondary); font-size: 15px; margin-top: 2px; }
+  .tag {
+    font-size: 11.5px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em;
+    color: var(--changed); white-space: nowrap;
+  }
+
+  button { font: inherit; color: inherit; cursor: pointer; }
+  .change-btn {
+    background: none; border: 1px solid var(--border); border-radius: 999px;
+    padding: 5px 14px; min-height: 36px; font-size: 14.5px; color: var(--text-secondary);
+    white-space: nowrap;
+  }
+  .change-btn:hover { border-color: var(--text-muted); }
+  .link-btn {
+    background: none; border: none; padding: 8px 0; min-height: 40px;
+    color: var(--accent); text-decoration: underline; font-size: 15.5px; text-align: left;
+  }
+  .danger-btn { color: var(--danger); }
+
+  .add-row { border-top: 1px solid var(--grid); padding: 6px 0 10px; }
+
+  .fields { display: grid; gap: 10px; margin-top: 10px; }
+  .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .row-city { display: grid; grid-template-columns: 2fr 1fr 1.2fr; gap: 10px; }
+  .field label {
+    display: block; font-size: 12.5px; font-weight: 600; color: var(--text-muted);
+    text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 3px;
+  }
+  input, textarea {
+    width: 100%; font: inherit; font-size: 17px; /* 17px stops iOS zooming on focus */
+    color: var(--text-primary); background: var(--plane);
+    border: 1px solid var(--border); border-radius: 10px;
+    padding: 10px 12px; min-height: 46px;
+  }
+  input:focus, textarea:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+  textarea { min-height: 88px; resize: vertical; }
+  .hint { font-size: 14px; color: var(--text-muted); margin-top: 2px; }
+
+  .editor-actions { display: flex; gap: 12px; align-items: center; margin-top: 12px; flex-wrap: wrap; }
+
+  .bar {
+    position: fixed; left: 0; right: 0; bottom: 0;
+    background: color-mix(in srgb, var(--plane) 92%, transparent);
+    backdrop-filter: blur(8px);
+    border-top: 1px solid var(--border);
+    padding: 12px 16px calc(12px + env(safe-area-inset-bottom));
+  }
+  .bar-inner { max-width: 640px; margin: 0 auto; display: grid; gap: 8px; }
+  .primary {
+    background: var(--accent); color: var(--accent-text); border: none;
+    border-radius: 12px; padding: 15px 18px; min-height: 54px;
+    font-size: 18px; font-weight: 600; width: 100%;
+  }
+  .primary:active { transform: translateY(1px); }
+  .primary[disabled] { opacity: 0.5; cursor: default; }
+  .secondary {
+    background: none; border: none; color: var(--text-secondary);
+    text-decoration: underline; font-size: 15.5px; min-height: 40px; width: 100%;
+  }
+
+  .summary { margin: 0; padding: 0; list-style: none; }
+  .summary li { border-top: 1px solid var(--grid); padding: 12px 0; }
+  .summary li:first-child { border-top: none; }
+  .summary .what { font-weight: 600; }
+  .summary .was { color: var(--text-secondary); font-size: 15.5px; }
+  .summary .was s { color: var(--text-muted); text-decoration-thickness: 1px; }
+
+  .notice { border-radius: 12px; padding: 12px 14px; font-size: 15.5px; margin: 16px 0; }
+  .notice.warn { background: var(--changed-bg); color: var(--changed); border: 1px solid var(--changed); }
+  .notice.bad { background: var(--surface-1); color: var(--danger); border: 1px solid var(--danger); }
+
+  .done { text-align: center; padding: 28px 8px; }
+  .done .tick { font-size: 46px; line-height: 1; }
+  .done h2 { font-size: 23px; margin: 12px 0 6px; }
+  .done p { color: var(--text-secondary); margin: 0 auto; max-width: 34ch; }
+
+  pre.copy {
+    background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px;
+    padding: 12px; font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+    white-space: pre-wrap; word-break: break-word; max-height: 300px; overflow: auto;
+  }
+
+  footer { color: var(--text-muted); font-size: 14px; padding: 8px 0 0; }
+  .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="church" id="church"></div>
+    <h1 id="title">Directory update</h1>
+    <p class="lede" id="lede"></p>
+  </header>
+  <main id="app" aria-live="polite"></main>
+  <footer id="foot"></footer>
+</div>
+
+<div class="bar" id="bar" hidden>
+  <div class="bar-inner">
+    <button class="primary" id="primary"></button>
+    <button class="secondary" id="secondary" hidden></button>
+  </div>
+</div>
+
+<script type="module">
+import {
+  normalizeRecord, cloneRecord, nextPersonKey, blankRecord, isEmptyRecord,
+  decodeRecord, demoRecord, diffRecord, describeChange, formatDate, mergeDate,
+  formatPhone, addressLines, addressLine, householdTitle, personName,
+  submissionText, submissionSubject, submissionPayload, mailtoUrl, escapeHtml,
+} from './directory.js';
+import { CONFIG, configFromUrl } from './config.js';
+
+const params = new URLSearchParams(location.search);
+const cfg = configFromUrl(location.search);
+// Photo-day mode: the office is driving on a tablet, so submissions are stored
+// locally for export at the end rather than emailed one family at a time.
+const KIOSK = params.get('kiosk') === '1';
+const STORE_KEY = 'churchdir.submissions.v1';
+
+const el = {
+  app: document.getElementById('app'),
+  bar: document.getElementById('bar'),
+  primary: document.getElementById('primary'),
+  secondary: document.getElementById('secondary'),
+  church: document.getElementById('church'),
+  title: document.getElementById('title'),
+  lede: document.getElementById('lede'),
+  foot: document.getElementById('foot'),
+};
+
+let original = null;   // what the office has on file
+let working = null;    // what the family is telling us
+let mode = 'review';   // review | edit | confirm | sent
+let open = new Set();  // sections currently expanded for editing
+let fatal = '';
+
+// --- load -----------------------------------------------------------------
+
+function readHash() {
+  const hash = location.hash.replace(/^#/, '');
+  const inner = new URLSearchParams(hash);
+  return inner.get('r') || '';
+}
+
+try {
+  if (params.get('demo') === '1' && !readHash()) {
+    original = demoRecord();
+  } else {
+    const encoded = readHash();
+    original = encoded ? decodeRecord(encoded) : blankRecord();
+  }
+} catch (err) {
+  fatal = err && err.message ? err.message : 'That link could not be read.';
+  original = blankRecord();
+}
+working = cloneRecord(original);
+
+const startedBlank = isEmptyRecord(original);
+// With nothing on file there is nothing to confirm, so open straight into
+// editing rather than showing an empty card and a "looks right" button. A link
+// we failed to decode lands here too: offering to confirm a record we couldn't
+// read would invite someone to approve a blank entry.
+if (startedBlank) {
+  mode = 'edit';
+  open = new Set(['household', 'address']);
+}
+
+// --- helpers --------------------------------------------------------------
+
+const changes = () => diffRecord(original, working);
+const changedKeys = () => new Set(changes().map((c) => c.key));
+
+function sectionChanged(id) {
+  const keys = changedKeys();
+  if (id === 'address') return keys.has('address');
+  if (id === 'household') return keys.has('household') || keys.has('phone') || keys.has('email') || keys.has('anniversary');
+  if (id.startsWith('person:')) {
+    const k = id.slice('person:'.length);
+    return [...keys].some((key) => key === `person:${k}` || key.startsWith(`person:${k}:`));
+  }
+  return false;
+}
+
+const val = (v) => (v ? escapeHtml(v) : '');
+
+function displayOrEmpty(text, placeholder) {
+  return text
+    ? `<div class="value">${escapeHtml(text)}</div>`
+    : `<div class="value empty">${escapeHtml(placeholder)}</div>`;
+}
+
+// --- render ---------------------------------------------------------------
+
+function render() {
+  el.church.textContent = cfg.churchName || '';
+  document.title = cfg.churchName ? `Directory update — ${cfg.churchName}` : 'Directory update';
+
+  if (mode === 'sent') return renderSent();
+  if (mode === 'confirm') return renderConfirm();
+  return renderRecord();
+}
+
+function renderRecord() {
+  el.title.textContent = householdTitle(working);
+  el.lede.innerHTML = ledeText();
+
+  const editing = mode === 'edit';
+  const parts = [];
+
+  parts.push(section('household', 'Household contact', householdBody(), editing));
+  parts.push(section('address', 'Address', addressBody(), editing));
+  for (const person of working.people) {
+    // The eyebrow carries the role and the value carries the name, so neither
+    // repeats the other — and the family name is already the page heading.
+    parts.push(section(`person:${person._k}`, person.role || 'Person', personBody(person), editing));
+  }
+  if (editing) {
+    parts.push(`<div class="add-row"><button class="link-btn" data-act="add-person">+ Add someone to this household</button></div>`);
+  }
+
+  let html = `<div class="card">${parts.join('')}</div>`;
+
+  if (editing) {
+    html += `
+      <div class="field">
+        <label for="note">Anything else we should know? (optional)</label>
+        <textarea id="note" data-act="note" placeholder="Moved in June, changed churches, prefer not to be listed…">${val(working.note)}</textarea>
+      </div>`;
+  }
+
+  if (fatal) {
+    html = `<div class="notice bad"><strong>We couldn't read that link.</strong><br>${escapeHtml(fatal)}
+      ${cfg.helpContact ? `Please contact ${escapeHtml(cfg.helpContact)}.` : 'Please ask the office for a new one.'}
+      <br><br>You can still fill in your details below.</div>` + html;
+  }
+
+  el.app.innerHTML = html;
+  el.foot.innerHTML = footText();
+  renderBar();
+}
+
+function section(id, label, body, editing) {
+  const isOpen = open.has(id);
+  const changed = sectionChanged(id);
+  const tag = changed ? `<span class="tag">Updated</span>` : '';
+  const btn = editing && !isOpen
+    ? `<button class="change-btn" data-act="open" data-id="${escapeHtml(id)}">${changed ? 'Edit again' : 'Change'}</button>`
+    : '';
+
+  return `
+    <div class="section${changed ? ' is-changed' : ''}">
+      <div class="section-head">
+        <div class="label">${escapeHtml(label)}</div>
+        ${tag}
+        ${btn}
+      </div>
+      ${isOpen ? body.edit : body.view}
+    </div>`;
+}
+
+function householdBody() {
+  const bits = [];
+  if (working.email) bits.push(working.email);
+  if (working.anniversary) bits.push(`Anniversary ${formatDate(working.anniversary)}`);
+
+  return {
+    view: `
+      ${displayOrEmpty(formatPhone(working.phone), 'No home phone on file')}
+      ${bits.length ? `<div class="sub">${escapeHtml(bits.join(' · '))}</div>` : ''}`,
+    edit: `
+      <div class="fields">
+        <div class="field">
+          <label for="f-household">Family name</label>
+          <input id="f-household" data-field="household" value="${val(working.household)}" autocomplete="family-name">
+        </div>
+        <div class="field">
+          <label for="f-phone">Home phone</label>
+          <input id="f-phone" data-field="phone" type="tel" inputmode="tel" value="${val(formatPhone(working.phone))}" autocomplete="home tel">
+        </div>
+        <div class="field">
+          <label for="f-email">Household email (optional)</label>
+          <input id="f-email" data-field="email" type="email" inputmode="email" autocapitalize="off" value="${val(working.email)}">
+        </div>
+        <div class="field">
+          <label for="f-anniv">Anniversary (optional)</label>
+          <input id="f-anniv" data-field="anniversary" value="${val(formatDate(working.anniversary))}" placeholder="Jun 13">
+          <div class="hint">Month and day only — we don't print the year.</div>
+        </div>
+      </div>
+      <div class="editor-actions"><button class="link-btn" data-act="close" data-id="household">Done</button></div>`,
+  };
+}
+
+function addressBody() {
+  const lines = addressLines(working.address);
+  return {
+    view: lines.length
+      ? `<div class="value">${lines.map(escapeHtml).join('<br>')}</div>`
+      : `<div class="value empty">No address on file</div>`,
+    edit: `
+      <div class="fields">
+        <div class="field">
+          <label for="f-street">Street</label>
+          <input id="f-street" data-field="address.street" value="${val(working.address.street)}" autocomplete="street-address">
+        </div>
+        <div class="field">
+          <label for="f-unit">Apt / unit (optional)</label>
+          <input id="f-unit" data-field="address.unit" value="${val(working.address.unit)}">
+        </div>
+        <div class="row-city">
+          <div class="field">
+            <label for="f-city">City</label>
+            <input id="f-city" data-field="address.city" value="${val(working.address.city)}" autocomplete="address-level2">
+          </div>
+          <div class="field">
+            <label for="f-state">State</label>
+            <input id="f-state" data-field="address.state" value="${val(working.address.state)}" autocomplete="address-level1">
+          </div>
+          <div class="field">
+            <label for="f-zip">ZIP</label>
+            <input id="f-zip" data-field="address.zip" inputmode="numeric" value="${val(working.address.zip)}" autocomplete="postal-code">
+          </div>
+        </div>
+      </div>
+      <div class="editor-actions"><button class="link-btn" data-act="close" data-id="address">Done</button></div>`,
+  };
+}
+
+function personBody(p) {
+  const bits = [p.email, formatPhone(p.mobile), p.birthday ? `b. ${formatDate(p.birthday)}` : ''].filter(Boolean);
+  const k = escapeHtml(p._k);
+  return {
+    view: `
+      ${displayOrEmpty(personName(p), 'Unnamed')}
+      ${bits.length ? `<div class="sub">${escapeHtml(bits.join(' · '))}</div>` : ''}`,
+    edit: `
+      <div class="fields">
+        <div class="field">
+          <label for="p-${k}-name">Name</label>
+          <input id="p-${k}-name" data-person="${k}" data-field="name" value="${val(p.name)}">
+        </div>
+        <div class="row2">
+          <div class="field">
+            <label for="p-${k}-role">Role</label>
+            <input id="p-${k}-role" data-person="${k}" data-field="role" value="${val(p.role)}" placeholder="Head, Spouse, Child">
+          </div>
+          <div class="field">
+            <label for="p-${k}-bday">Birthday</label>
+            <input id="p-${k}-bday" data-person="${k}" data-field="birthday" value="${val(formatDate(p.birthday))}" placeholder="Mar 4">
+          </div>
+        </div>
+        <div class="field">
+          <label for="p-${k}-email">Email</label>
+          <input id="p-${k}-email" data-person="${k}" data-field="email" type="email" inputmode="email" autocapitalize="off" value="${val(p.email)}">
+        </div>
+        <div class="field">
+          <label for="p-${k}-mobile">Mobile</label>
+          <input id="p-${k}-mobile" data-person="${k}" data-field="mobile" type="tel" inputmode="tel" value="${val(formatPhone(p.mobile))}">
+        </div>
+      </div>
+      <div class="editor-actions">
+        <button class="link-btn" data-act="close" data-id="person:${k}">Done</button>
+        <button class="link-btn danger-btn" data-act="remove-person" data-id="${k}">Remove from household</button>
+      </div>`,
+  };
+}
+
+function renderConfirm() {
+  const list = changes();
+  el.title.textContent = list.length ? 'Does this look right?' : 'Nothing to change';
+  el.lede.textContent = list.length
+    ? `This is everything we'll send to the office. Nothing else about your listing changes.`
+    : `We'll let the office know your details are correct as they stand.`;
+
+  const items = list.map((c) => {
+    const what = c.scope === 'person' && c.kind !== 'person-added' && c.kind !== 'person-removed'
+      ? `${c.person} — ${c.label}` : c.label;
+    let detail;
+    if (c.kind === 'person-added') detail = `<div class="was">${escapeHtml(c.to)}</div>`;
+    else if (c.kind === 'person-removed') detail = `<div class="was">${escapeHtml(c.person)}</div>`;
+    else if (c.kind === 'added') detail = `<div class="was">${escapeHtml(c.to)} <s>(was blank)</s></div>`;
+    else if (c.kind === 'removed') detail = `<div class="was"><s>${escapeHtml(c.from)}</s> removed</div>`;
+    else detail = `<div class="was"><s>${escapeHtml(c.from)}</s> → ${escapeHtml(c.to)}</div>`;
+    return `<li><div class="what">${escapeHtml(what)}</div>${detail}</li>`;
+  }).join('');
+
+  el.app.innerHTML = `
+    <div class="card" style="padding:16px">
+      ${list.length ? `<ul class="summary">${items}</ul>` : `<p style="margin:0;color:var(--text-secondary)">You've confirmed everything on file is correct. That's genuinely useful — it means the office can stop chasing you.</p>`}
+      ${working.note ? `<div class="section"><div class="label">Your note</div><div class="sub">${escapeHtml(working.note)}</div></div>` : ''}
+    </div>
+    <div id="send-status"></div>`;
+  el.foot.innerHTML = footText();
+  renderBar();
+}
+
+function renderSent() {
+  el.title.textContent = '';
+  el.lede.textContent = '';
+  const n = changes().length;
+  el.app.innerHTML = `
+    <div class="done">
+      <div class="tick" aria-hidden="true">✓</div>
+      <h2>${KIOSK ? 'Saved' : 'Thank you'}</h2>
+      <p>${KIOSK
+        ? `${escapeHtml(householdTitle(working))} recorded${n ? ` with ${n} change${n === 1 ? '' : 's'}` : ', no changes'}.`
+        : n
+          ? `We've got your ${n} update${n === 1 ? '' : 's'}. The office will take it from here.`
+          : `Thanks for confirming. Nothing else needed.`}</p>
+    </div>`;
+  el.foot.innerHTML = '';
+  renderBar();
+}
+
+function renderBar() {
+  el.bar.hidden = false;
+  el.secondary.hidden = true;
+
+  if (mode === 'review') {
+    el.primary.textContent = 'Everything is correct';
+    el.primary.disabled = false;
+    el.secondary.hidden = false;
+    el.secondary.textContent = 'Something needs updating';
+    return;
+  }
+  if (mode === 'edit') {
+    const n = changes().length;
+    el.primary.textContent = n ? `Review ${n} change${n === 1 ? '' : 's'}` : 'Continue';
+    el.primary.disabled = false;
+    if (!startedBlank) {
+      el.secondary.hidden = false;
+      el.secondary.textContent = n ? 'Start over' : 'Actually, nothing has changed';
+    }
+    return;
+  }
+  if (mode === 'confirm') {
+    el.primary.textContent = sendLabel();
+    el.primary.disabled = false;
+    el.secondary.hidden = false;
+    el.secondary.textContent = 'Go back and edit';
+    return;
+  }
+  el.bar.hidden = true;
+}
+
+function sendLabel() {
+  if (KIOSK) return 'Save and next family';
+  if (cfg.postUrl) return 'Send to the office';
+  if (cfg.officeEmail) return 'Send by email';
+  return 'Copy for the office';
+}
+
+function ledeText() {
+  if (mode !== 'review' && mode !== 'edit') return '';
+  if (startedBlank) return `We don't have you on file yet. Tell us as much or as little as you like.`;
+  const by = cfg.deadline ? ` <span class="deadline">Please check by ${escapeHtml(cfg.deadline)}.</span>` : '';
+  return mode === 'review'
+    ? `Here's what we have for your household. If it's all still right, one tap and you're done.${by}`
+    : `Change only what's wrong — everything you don't touch stays as it is.`;
+}
+
+function footText() {
+  const bits = [];
+  if (cfg.helpContact) bits.push(`Something not right, or not listed here? Contact ${escapeHtml(cfg.helpContact)}.`);
+  bits.push('Your details are only in this link and are not stored on any website.');
+  return bits.join('<br>');
+}
+
+// --- events ---------------------------------------------------------------
+
+el.app.addEventListener('click', (e) => {
+  const btn = e.target.closest('button[data-act]');
+  if (!btn) return;
+  const act = btn.dataset.act;
+
+  if (act === 'open') { open.add(btn.dataset.id); render(); focusFirst(btn.dataset.id); }
+  else if (act === 'close') { open.delete(btn.dataset.id); render(); }
+  else if (act === 'add-person') {
+    const key = nextPersonKey(working);
+    working.people.push({ _k: key, name: '', role: '', email: '', mobile: '', birthday: '' });
+    open.add(`person:${key}`);
+    render();
+    focusFirst(`person:${key}`);
+  } else if (act === 'remove-person') {
+    const k = btn.dataset.id;
+    const person = working.people.find((p) => p._k === k);
+    const known = original.people.some((p) => p._k === k);
+    const label = personName(person);
+    if (known && !confirm(`Tell the office that ${label} is no longer in this household?`)) return;
+    working.people = working.people.filter((p) => p._k !== k);
+    open.delete(`person:${k}`);
+    render();
+  }
+});
+
+// Commit edits as they're typed. Phones and birthdays are stored as typed and
+// only normalised on blur, so the field doesn't fight the person using it.
+el.app.addEventListener('input', (e) => {
+  const input = e.target;
+  if (!input.dataset) return;
+
+  if (input.dataset.act === 'note') { working.note = input.value; updateBarCount(); return; }
+
+  const field = input.dataset.field;
+  if (!field) return;
+
+  if (input.dataset.person) {
+    const p = working.people.find((q) => q._k === input.dataset.person);
+    if (!p) return;
+    p[field] = field === 'birthday' ? mergeDate(personOriginal(p._k, 'birthday'), input.value) : input.value;
+  } else if (field.startsWith('address.')) {
+    working.address[field.slice('address.'.length)] = input.value;
+  } else if (field === 'anniversary') {
+    working.anniversary = mergeDate(original.anniversary, input.value);
+  } else {
+    working[field] = input.value;
+  }
+  updateBarCount();
+});
+
+el.app.addEventListener('blur', (e) => {
+  const input = e.target;
+  if (!input.dataset || !input.dataset.field) return;
+  const field = input.dataset.field;
+  if (field === 'phone' || field === 'mobile') input.value = formatPhone(input.value);
+  if (field === 'birthday' || field === 'anniversary') {
+    const stored = input.dataset.person
+      ? (working.people.find((q) => q._k === input.dataset.person) || {}).birthday
+      : working.anniversary;
+    const pretty = formatDate(stored);
+    if (pretty) input.value = pretty;
+  }
+}, true);
+
+function personOriginal(key, field) {
+  const p = original.people.find((q) => q._k === key);
+  return p ? p[field] : '';
+}
+
+function focusFirst(id) {
+  const section = [...el.app.querySelectorAll('.section')].find((s) => s.querySelector(`[data-id="${CSS.escape(id)}"]`));
+  const input = section && section.querySelector('input');
+  if (input) input.focus();
+}
+
+// Only the button label depends on the change count, so avoid a full re-render
+// while someone is typing — it would blow away focus and the caret position.
+function updateBarCount() {
+  if (mode === 'edit') renderBar();
+}
+
+el.primary.addEventListener('click', () => {
+  if (mode === 'review') { mode = 'confirm'; render(); window.scrollTo(0, 0); return; }
+  if (mode === 'edit') { mode = 'confirm'; render(); window.scrollTo(0, 0); return; }
+  if (mode === 'confirm') send();
+});
+
+el.secondary.addEventListener('click', () => {
+  if (mode === 'review') {
+    mode = 'edit';
+    render();
+    window.scrollTo(0, 0);
+    return;
+  }
+  if (mode === 'edit') {
+    working = cloneRecord(original);
+    open = new Set();
+    mode = 'review';
+    render();
+    window.scrollTo(0, 0);
+    return;
+  }
+  if (mode === 'confirm') { mode = changes().length || startedBlank ? 'edit' : 'review'; render(); }
+});
+
+// --- sending --------------------------------------------------------------
+
+function nowStamp() {
+  return new Date().toLocaleString(undefined, {
+    year: 'numeric', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
+  });
+}
+
+function saveLocally(payload) {
+  try {
+    const all = JSON.parse(localStorage.getItem(STORE_KEY) || '[]');
+    // Re-confirming a household replaces its earlier answer rather than
+    // stacking a second one the office would have to reconcile.
+    const rest = all.filter((s) => !(s.id && s.id === payload.id));
+    rest.push(payload);
+    localStorage.setItem(STORE_KEY, JSON.stringify(rest));
+    return true;
+  } catch (err) {
+    return false;
+  }
+}
+
+async function send() {
+  const submittedAt = nowStamp();
+  const payload = submissionPayload(original, working, { submittedAt });
+  const text = submissionText(original, working, { submittedAt });
+  const status = document.getElementById('send-status');
+
+  if (KIOSK) {
+    const ok = saveLocally(payload);
+    if (!ok) {
+      status.innerHTML = `<div class="notice bad">Couldn't save on this device. Copy the summary below into the office records instead.</div><pre class="copy">${escapeHtml(text)}</pre>`;
+      return;
+    }
+    mode = 'sent';
+    render();
+    setTimeout(() => history.length > 1 && history.back(), 900);
+    return;
+  }
+
+  if (cfg.postUrl) {
+    el.primary.disabled = true;
+    el.primary.textContent = 'Sending…';
+    try {
+      const res = await fetch(cfg.postUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...payload, summary: text }),
+      });
+      if (!res.ok) throw new Error(`The server replied ${res.status}.`);
+      mode = 'sent';
+      render();
+      return;
+    } catch (err) {
+      // Never strand a submission: fall through to email or copy.
+      status.innerHTML = `<div class="notice warn"><strong>That didn't go through.</strong><br>${escapeHtml(err.message || 'Connection problem.')} Use the option below instead — nothing you typed is lost.</div>`;
+      el.primary.disabled = false;
+      el.primary.textContent = cfg.officeEmail ? 'Send by email instead' : 'Copy for the office';
+      cfg.postUrl = '';
+      return;
+    }
+  }
+
+  if (cfg.officeEmail) {
+    location.href = mailtoUrl({
+      to: cfg.officeEmail,
+      subject: submissionSubject(original, working),
+      body: text,
+    });
+    // The mail app opens over the page; leave a way back if it doesn't.
+    status.innerHTML = `<div class="notice warn">Your email app should be opening with the message ready to send. <strong>It isn't sent until you tap send there.</strong><br><br>Nothing happened? <button class="link-btn" data-act="copy">Copy the summary instead</button></div>`;
+    status.querySelector('[data-act="copy"]').addEventListener('click', () => showCopy(text, status));
+    return;
+  }
+
+  showCopy(text, status);
+}
+
+async function showCopy(text, status) {
+  let copied = false;
+  try {
+    await navigator.clipboard.writeText(text);
+    copied = true;
+  } catch (err) {
+    copied = false;
+  }
+  status.innerHTML = `
+    <div class="notice warn">${copied
+      ? 'Copied. Paste it into an email or text to the office.'
+      : 'Copy the text below and send it to the office.'}</div>
+    <pre class="copy">${escapeHtml(text)}</pre>`;
+}
+
+// --- go -------------------------------------------------------------------
+
+window.addEventListener('hashchange', () => location.reload());
+render();
+</script>
+</body>
+</html>

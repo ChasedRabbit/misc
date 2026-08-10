@@ -1,0 +1,4 @@
+# Never commit a directory export — it is the whole congregation's personal data.
+*.csv
+*.tsv
+*.xlsx
