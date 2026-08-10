@@ -87,6 +87,123 @@ export function fieldCapacity({ clay, sand, organicMatter = 2 }) {
 }
 
 /**
+ * Saturated hydraulic conductivity, mm/hr, also after Saxton & Rawls (2006).
+ * This is how fast the soil sheds water once wet, which is a different
+ * question from how much it holds — and it's what decides whether Tuesday's
+ * rain is still a problem on Thursday.
+ */
+export function hydraulicConductivity({ clay, sand, organicMatter = 2 }) {
+  const theta33 = fieldCapacity({ clay, sand, organicMatter });
+  if (theta33 == null) return null;
+
+  const C = clay / 100;
+  const S = sand / 100;
+  const OM = clamp(Number.isFinite(organicMatter) ? organicMatter : 2, 0, 8);
+
+  // Wilting point.
+  const wt =
+    -0.024 * S + 0.487 * C + 0.006 * OM +
+    0.005 * (S * OM) - 0.013 * (C * OM) + 0.068 * (S * C) + 0.031;
+  const theta1500 = wt + (0.14 * wt - 0.02);
+
+  // Saturation.
+  const st =
+    0.278 * S + 0.034 * C + 0.022 * OM -
+    0.018 * (S * OM) - 0.027 * (C * OM) - 0.584 * (S * C) + 0.078;
+  const thetaS33 = st + (0.636 * st - 0.107);
+  const thetaS = theta33 + thetaS33 - 0.097 * S + 0.043;
+
+  if (!(theta33 > 0) || !(theta1500 > 0) || !(thetaS > theta33)) return null;
+  const B = (Math.log(1500) - Math.log(33)) / (Math.log(theta33) - Math.log(theta1500));
+  if (!Number.isFinite(B) || B === 0) return null;
+  const ks = 1930 * Math.pow(thetaS - theta33, 3 - 1 / B);
+  return Number.isFinite(ks) ? clamp(ks, 0.1, 400) : null;
+}
+
+// Loam sits near 15 mm/hr, so normalising against it keeps the existing
+// drainRate scale — where loam is 1.0 — meaning the same thing as before.
+const KSAT_LOAM = 15.5;
+
+export function drainRateFromKsat(ksat) {
+  if (!Number.isFinite(ksat)) return null;
+  return clamp(ksat / KSAT_LOAM, 0.25, 3);
+}
+
+/**
+ * USDA hydrologic soil group, which is a direct statement about infiltration.
+ * Dual groups (A/D, B/D, C/D) describe a soil that only drains well when
+ * artificially drained — take the wet half, since we can't assume tile.
+ */
+export function drainRateFromHydGroup(hydgrp) {
+  if (typeof hydgrp !== 'string') return null;
+  const g = hydgrp.trim().toUpperCase();
+  if (g.includes('/')) return { A: 0.55, B: 0.5, C: 0.45 }[g[0]] ?? 0.5;
+  return { A: 1.8, B: 1.2, C: 0.8, D: 0.5 }[g] ?? null;
+}
+
+/**
+ * Turn a Soil Data Access result into the handful of facts that change how
+ * you'd build a wall. Accepts the JSON+COLUMNNAME shape, where row zero is
+ * the column names.
+ */
+export function parseSsurgo(table) {
+  if (!Array.isArray(table) || table.length < 2) return null;
+  const [cols, ...rows] = table;
+  if (!Array.isArray(cols) || !Array.isArray(rows[0])) return null;
+
+  const idx = (name) => cols.findIndex((c) => String(c).toLowerCase() === name);
+  const row = rows[0];
+  const get = (name) => {
+    const i = idx(name);
+    if (i < 0) return null;
+    const v = row[i];
+    return v === null || v === undefined || v === '' ? null : v;
+  };
+  const num = (name) => {
+    const v = get(name);
+    const n = typeof v === 'number' ? v : parseFloat(v);
+    return Number.isFinite(n) ? n : null;
+  };
+
+  const hydGroup = get('hydgrpdcd');
+  return {
+    series: get('muname'),
+    drainageClass: get('drclassdcd'),
+    hydGroup,
+    drainRate: drainRateFromHydGroup(hydGroup),
+    bedrockCm: num('brockdepmin'),
+    waterTableCm: num('wtdepannmin'),
+    floodFrequency: get('flodfreqdcd'),
+  };
+}
+
+const CM_PER_IN = 2.54;
+
+/**
+ * Site facts worth telling someone before they dig a wall footing. These are
+ * about the hole, not the weather, so they don't touch the score.
+ */
+export function siteWarnings(site) {
+  if (!site) return [];
+  const out = [];
+  const inches = (cm) => Math.round(cm / CM_PER_IN);
+
+  if (Number.isFinite(site.waterTableCm) && site.waterTableCm <= 91) {
+    out.push(`Seasonal water table around ${inches(site.waterTableCm)}" down — expect the trench to hold water, and put drainage stone and a pipe behind the wall.`);
+  }
+  if (Number.isFinite(site.bedrockCm) && site.bedrockCm <= 91) {
+    out.push(`Bedrock around ${inches(site.bedrockCm)}" down — your base course may not go as deep as planned.`);
+  }
+  if (typeof site.drainageClass === 'string' && /poorly drained/i.test(site.drainageClass)) {
+    out.push(`Mapped as ${site.drainageClass.toLowerCase()} — this ground gives water back slowly, so allow extra drying days after rain.`);
+  }
+  if (typeof site.floodFrequency === 'string' && /frequent|occasional/i.test(site.floodFrequency)) {
+    out.push(`Flooding is mapped as ${site.floodFrequency.toLowerCase()} here.`);
+  }
+  return out;
+}
+
+/**
  * Simplified USDA texture triangle — enough to choose between the three
  * settings this tool offers. Percentages by weight.
  */
@@ -322,10 +439,30 @@ export function analyze(data, soilKey = 'loam', nowMs = Date.now(), site = null)
   const bucket = SOIL[soilKey] || SOIL.loam;
 
   const measuredFc = site ? fieldCapacity(site) : null;
-  const soil = measuredFc ? { ...bucket, vwcWork: measuredFc } : bucket;
-  const soilBasis = measuredFc
-    ? { source: 'measured', vwcWork: measuredFc, clay: site.clay, sand: site.sand, organicMatter: site.organicMatter }
-    : { source: 'typical', vwcWork: bucket.vwcWork };
+  // Drainage, best source first: the soil survey's own hydrologic group, then
+  // conductivity derived from texture, then the bucket's typical figure.
+  const measuredDrain = site
+    ? (site.drainRate ?? drainRateFromKsat(hydraulicConductivity(site)))
+    : null;
+
+  const soil = {
+    ...bucket,
+    ...(measuredFc ? { vwcWork: measuredFc } : {}),
+    ...(measuredDrain ? { drainRate: measuredDrain } : {}),
+  };
+  const soilBasis = measuredFc || measuredDrain
+    ? {
+        source: 'measured',
+        vwcWork: soil.vwcWork,
+        drainRate: soil.drainRate,
+        drainFrom: site.drainRate ? 'survey' : (measuredDrain ? 'texture' : 'typical'),
+        clay: site.clay,
+        sand: site.sand,
+        organicMatter: site.organicMatter,
+        series: site.series ?? null,
+        drainageClass: site.drainageClass ?? null,
+      }
+    : { source: 'typical', vwcWork: bucket.vwcWork, drainRate: bucket.drainRate };
   const H = data.hourly || {};
   const time = H.time || [];
   const n = time.length;
@@ -451,6 +588,7 @@ export function analyze(data, soilKey = 'loam', nowMs = Date.now(), site = null)
     dryAt: hours.slice(nowIdx).find((h) => h.saturation <= soil.workLimit) || null,
     soil,
     soilBasis,
+    siteWarnings: siteWarnings(site),
     hasSoilTemp,
     moisture,
     timezone: data.timezone,

@@ -147,6 +147,12 @@
   .ground-val { font-size: 22px; font-weight: 600; }
   .meter { height: 10px; border-radius: 5px; background: var(--grid); overflow: hidden; margin: 10px 0 8px; }
   .meter i { display: block; height: 100%; border-radius: 5px; }
+  .soil-row { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--grid); }
+  .site-warn {
+    display: flex; gap: 8px; align-items: flex-start;
+    font-size: 13.5px; color: var(--text-secondary); margin-top: 10px;
+  }
+  .site-warn .dot { margin-top: 5px; width: 9px; height: 9px; }
   .muted { color: var(--text-secondary); font-size: 14.5px; }
   .tiny { color: var(--text-muted); font-size: 12.5px; }
 
@@ -222,6 +228,17 @@
       <div class="ground-val" id="ground-label">—</div>
       <div class="meter"><i id="ground-meter"></i></div>
       <p class="muted" id="ground-note" style="margin:4px 0 0"></p>
+
+      <div id="site-warnings"></div>
+
+      <div class="soil-row">
+        <div class="seg" role="group" aria-label="Soil type">
+          <button type="button" data-soil="clay" aria-pressed="false">Clay</button>
+          <button type="button" data-soil="loam" aria-pressed="false">Loam</button>
+          <button type="button" data-soil="sand" aria-pressed="false">Sandy</button>
+        </div>
+      </div>
+      <p class="tiny" id="soil-examples" style="margin:8px 0 0"></p>
     </section>
 
     <section class="card">
@@ -234,17 +251,6 @@
       </div>
       <div id="days"></div>
       <p class="tiny" style="margin:12px 0 0">Tap a day for the hour-by-hour reasons. Hours shown are 7am–7pm.</p>
-    </section>
-
-    <section class="card">
-      <div class="eyebrow">Soil type</div>
-      <p class="muted" style="margin:6px 0 10px">Sets how much water the ground can hold before compaction stops working. Detected automatically where possible.</p>
-      <div class="seg" role="group" aria-label="Soil type">
-        <button type="button" data-soil="clay" aria-pressed="false">Clay</button>
-        <button type="button" data-soil="loam" aria-pressed="false">Loam</button>
-        <button type="button" data-soil="sand" aria-pressed="false">Sandy</button>
-      </div>
-      <p class="tiny" id="soil-examples" style="margin:8px 0 0"></p>
     </section>
 
     <details class="card">
@@ -266,7 +272,7 @@
 </div>
 
 <script type="module">
-import { analyze, explainNow, fmtHour, fmtRun, fmtDay, classifySoil, SOIL } from './wall.js';
+import { analyze, explainNow, fmtHour, fmtRun, fmtDay, classifySoil, parseSsurgo, SOIL } from './wall.js';
 
 const $ = (s) => document.querySelector(s);
 const LS = { loc: 'wall.loc', soil: 'wall.soil', soilManual: 'wall.soilManual' };
@@ -393,6 +399,44 @@ async function detectSoil(lat, lon) {
   }
 }
 
+// USDA Soil Data Access — the actual mapped soil series for this spot, at
+// survey-polygon resolution rather than a 250m global raster, plus the things
+// SoilGrids can't tell you: drainage class, water table and bedrock depth.
+// US only. This is a government service that may well not permit browser
+// requests; every failure path here is silent and falls back to SoilGrids.
+const SDA = 'https://sdmdataaccess.sc.egov.usda.gov/Tabular/post.rest';
+
+async function fetchSsurgo(lat, lon) {
+  const cacheKey = `wall.ssurgo.${lat.toFixed(3)},${lon.toFixed(3)}`;
+  const cached = readJSON(cacheKey);
+  if (cached) return cached.empty ? null : cached;
+
+  const sql = `SELECT TOP 1 muname, drclassdcd, hydgrpdcd, brockdepmin, wtdepannmin, flodfreqdcd
+    FROM muaggatt
+    WHERE mukey IN (SELECT * FROM SDA_Get_Mukey_from_intersection_with_WktWgs84('point(${lon} ${lat})'))`;
+
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 9000);
+  try {
+    const res = await fetch(SDA, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query: sql, format: 'JSON+COLUMNNAME' }),
+      signal: ctrl.signal,
+    });
+    if (!res.ok) return null;
+    const j = await res.json();
+    const parsed = parseSsurgo(j?.Table);
+    // Remember misses too, so we don't re-ask on every load outside the US.
+    localStorage.setItem(cacheKey, JSON.stringify(parsed || { empty: true }));
+    return parsed;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function geocode(q) {
   const url = new URL(GEOCODE);
   url.search = new URLSearchParams({ name: q, count: '5', language: 'en', format: 'json' });
@@ -424,13 +468,20 @@ async function load() {
   try {
     state.data = await fetchForecast(state.loc.lat, state.loc.lon);
     render();
-    // Runs after the forecast is on screen, and re-renders only if it changes
-    // something. A failure here is silent by design.
-    detectSoil(state.loc.lat, state.loc.lon).then((found) => {
-      if (!found) return;
-      state.detected = found;
-      if (!state.soilManual && found.key !== state.soil) {
-        state.soil = found.key;
+    // Both lookups run after the forecast is on screen and re-render only if
+    // they add something. Every failure here is silent by design.
+    Promise.allSettled([
+      detectSoil(state.loc.lat, state.loc.lon),
+      fetchSsurgo(state.loc.lat, state.loc.lon),
+    ]).then(([texture, survey]) => {
+      const t = texture.status === 'fulfilled' ? texture.value : null;
+      const s = survey.status === 'fulfilled' ? survey.value : null;
+      if (!t && !s) return;
+      // The survey wins on drainage and identity; SoilGrids supplies texture.
+      state.detected = { ...(t || {}), ...(s || {}) };
+      const key = t?.key;
+      if (key && !state.soilManual && key !== state.soil) {
+        state.soil = key;
         localStorage.setItem(LS.soil, state.soil);
       }
       render();
@@ -447,11 +498,18 @@ function render() {
     // Compute the threshold from this spot's own texture, unless he has
     // overridden the soil type — in which case he's telling us the survey
     // doesn't describe his yard, so fall back to the typical figures.
-    const site = state.detected && !state.soilManual
+    const d0 = state.detected;
+    const site = d0 && !state.soilManual
       ? {
-          clay: state.detected.clay,
-          sand: state.detected.sand,
-          organicMatter: state.detected.organicMatter ?? undefined,
+          clay: d0.clay,
+          sand: d0.sand,
+          organicMatter: d0.organicMatter ?? undefined,
+          drainRate: d0.drainRate ?? undefined,
+          series: d0.series,
+          drainageClass: d0.drainageClass,
+          waterTableCm: d0.waterTableCm,
+          bedrockCm: d0.bedrockCm,
+          floodFrequency: d0.floodFrequency,
         }
       : null;
     a = analyze(state.data, state.soil, Date.now(), site);
@@ -586,19 +644,41 @@ function render() {
   for (const b of document.querySelectorAll('[data-soil]')) {
     b.setAttribute('aria-pressed', String(b.dataset.soil === state.soil));
   }
+  // Site facts from the soil survey — about the hole, not the weather.
+  const warn = $('#site-warnings');
+  warn.textContent = '';
+  for (const w of a.siteWarnings) {
+    const el = document.createElement('div');
+    el.className = 'site-warn';
+    el.innerHTML = '<span class="dot marginal"></span><span></span>';
+    el.lastElementChild.textContent = w;
+    warn.append(el);
+  }
+
   const d = state.detected;
   if (d && !state.soilManual) {
-    const om = d.organicMatter != null ? `, ${d.organicMatter}% organic matter` : '';
-    const basis = a.soilBasis.source === 'measured'
-      ? ` Holds water to ${a.soilBasis.vwcWork.toFixed(2)} before compaction stops working, calculated from those figures rather than a typical value.`
-      : '';
+    // Describe the soil in one clause, then the threshold in another.
+    const facts = [];
+    if (d.drainageClass) facts.push(d.drainageClass.toLowerCase());
+    if (d.clay != null && d.sand != null) facts.push(`${d.clay}% clay, ${d.sand}% sand`);
+    if (d.organicMatter != null) facts.push(`${d.organicMatter}% organic matter`);
+
+    const sentences = [];
+    if (d.series) {
+      sentences.push(facts.length ? `Mapped as ${d.series} — ${facts.join(', ')}` : `Mapped as ${d.series}`);
+    } else if (facts.length) {
+      sentences.push(`Survey at 15–60cm: ${facts.join(', ')}`);
+    }
+    if (a.soilBasis.source === 'measured' && a.soilBasis.vwcWork) {
+      sentences.push(`Workable below ${a.soilBasis.vwcWork.toFixed(2)} water content, calculated from those figures rather than assumed`);
+    }
+    sentences.push('Tap to override');
+    $('#soil-examples').textContent = sentences.join('. ') + '.';
+  } else if (d && state.soilManual && d.key && d.key !== state.soil) {
     $('#soil-examples').textContent =
-      `Soil survey at 15–60cm here: ${d.clay}% clay, ${d.sand}% sand${om}.${basis} Tap to override if you know better.`;
-  } else if (d && state.soilManual && d.key !== state.soil) {
-    $('#soil-examples').textContent =
-      `${a.soil.label}: ${a.soil.examples}. (The soil survey says ${SOIL[d.key].label.toLowerCase()} here.)`;
+      `${a.soil.label}: ${a.soil.examples}. (The survey says ${SOIL[d.key].label.toLowerCase()} here.)`;
   } else {
-    $('#soil-examples').textContent = `${a.soil.label}: ${a.soil.examples}`;
+    $('#soil-examples').textContent = `${a.soil.label}: ${a.soil.examples}. Detected automatically where the survey covers it.`;
   }
 
   const tb = $('#table tbody');

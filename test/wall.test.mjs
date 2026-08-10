@@ -2,7 +2,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   analyze, scoreHour, saturationSeries, saturationFromMeasured, pickMoistureLayer,
-  classifySoil, fieldCapacity, heatIndex, findRuns, findStretches, cureRisk, SOIL,
+  classifySoil, fieldCapacity, hydraulicConductivity, drainRateFromKsat,
+  drainRateFromHydGroup, parseSsurgo, siteWarnings,
+  heatIndex, findRuns, findStretches, cureRisk, SOIL,
 } from '../wall/wall.js';
 import { makeDemoData } from '../demo-data.js';
 
@@ -301,6 +303,88 @@ test('analyze ignores unusable measured properties and falls back to the bucket'
   const a = analyze(makeDemoData(NOW), 'loam', NOW, { clay: 80, sand: 80 });
   assert.equal(a.soilBasis.source, 'typical');
   assert.equal(a.soil.vwcWork, SOIL.loam.vwcWork);
+});
+
+test('hydraulic conductivity lands near published values and orders correctly', () => {
+  const sand = hydraulicConductivity({ sand: 90, clay: 5, organicMatter: 1 });
+  const loam = hydraulicConductivity({ sand: 40, clay: 20, organicMatter: 2.5 });
+  const clay = hydraulicConductivity({ sand: 20, clay: 55, organicMatter: 3 });
+
+  // Loam is documented around 13 mm/hr; sand is an order of magnitude faster.
+  assert.ok(loam > 8 && loam < 30, `loam Ksat out of range: ${loam}`);
+  assert.ok(sand > loam * 3, `sand should shed water far faster (${sand} vs ${loam})`);
+  assert.ok(clay < loam, `clay should be slower than loam (${clay} vs ${loam})`);
+  assert.equal(hydraulicConductivity({ clay: 60, sand: 70 }), null, 'impossible texture');
+});
+
+test('drain rate keeps loam at about 1.0, matching the old scale', () => {
+  const loam = drainRateFromKsat(hydraulicConductivity({ sand: 40, clay: 20, organicMatter: 2.5 }));
+  assert.ok(Math.abs(loam - 1) < 0.35, `loam should stay near 1.0, got ${loam}`);
+  assert.ok(drainRateFromKsat(hydraulicConductivity({ sand: 90, clay: 5 })) > loam);
+  assert.equal(drainRateFromKsat(null), null);
+});
+
+test('hydrologic soil group maps to drainage, and dual groups take the wet half', () => {
+  assert.ok(drainRateFromHydGroup('A') > drainRateFromHydGroup('B'));
+  assert.ok(drainRateFromHydGroup('B') > drainRateFromHydGroup('C'));
+  assert.ok(drainRateFromHydGroup('C') > drainRateFromHydGroup('D'));
+  // A/D only drains like A once someone has tiled it; assume nobody has.
+  assert.ok(drainRateFromHydGroup('A/D') < drainRateFromHydGroup('C'));
+  assert.equal(drainRateFromHydGroup('nonsense'), null);
+  assert.equal(drainRateFromHydGroup(null), null);
+});
+
+test('SSURGO results parse into the facts that change how you build', () => {
+  const table = [
+    ['muname', 'drclassdcd', 'hydgrpdcd', 'brockdepmin', 'wtdepannmin', 'flodfreqdcd'],
+    ['Sequatchie loam, 2 to 5 percent slopes', 'Well drained', 'B', 200, 152, 'None'],
+  ];
+  const s = parseSsurgo(table);
+  assert.equal(s.series, 'Sequatchie loam, 2 to 5 percent slopes');
+  assert.equal(s.drainageClass, 'Well drained');
+  assert.equal(s.hydGroup, 'B');
+  assert.equal(s.drainRate, drainRateFromHydGroup('B'));
+  assert.equal(s.bedrockCm, 200);
+
+  assert.equal(parseSsurgo(null), null);
+  assert.equal(parseSsurgo([['muname']]), null, 'headers with no rows');
+  assert.equal(parseSsurgo([]), null);
+
+  // Missing and empty columns become null rather than NaN or "".
+  const sparse = parseSsurgo([['muname', 'wtdepannmin'], ['Something silty', '']]);
+  assert.equal(sparse.waterTableCm, null);
+  assert.equal(sparse.hydGroup, null);
+  assert.equal(sparse.drainRate, null);
+});
+
+test('site warnings fire on shallow water table, bedrock, poor drainage and flooding', () => {
+  const w = siteWarnings({ waterTableCm: 46, bedrockCm: 51, drainageClass: 'Somewhat poorly drained', floodFrequency: 'Occasional' });
+  assert.equal(w.length, 4);
+  assert.ok(w[0].includes('18"'), `should convert 46cm to inches: ${w[0]}`);
+  assert.ok(w[1].includes('20"'));
+  assert.ok(/drainage stone/i.test(w[0]), 'water table warning should say what to do about it');
+
+  // A deep, well-drained, unflooded site has nothing to warn about.
+  assert.deepEqual(siteWarnings({ waterTableCm: 200, bedrockCm: 300, drainageClass: 'Well drained', floodFrequency: 'None' }), []);
+  assert.deepEqual(siteWarnings(null), []);
+  assert.deepEqual(siteWarnings({}), []);
+});
+
+test('analyze prefers survey drainage, then texture, then the bucket', () => {
+  const data = makeDemoData(NOW);
+  const texture = { clay: 55, sand: 14, organicMatter: 2.4 };
+
+  const plain = analyze(data, 'clay', NOW);
+  assert.equal(plain.soilBasis.drainRate, SOIL.clay.drainRate);
+
+  const fromTexture = analyze(data, 'clay', NOW, texture);
+  assert.equal(fromTexture.soilBasis.drainFrom, 'texture');
+
+  const fromSurvey = analyze(data, 'clay', NOW, { ...texture, drainRate: drainRateFromHydGroup('D'), drainageClass: 'Poorly drained' });
+  assert.equal(fromSurvey.soilBasis.drainFrom, 'survey');
+  assert.equal(fromSurvey.soilBasis.drainRate, drainRateFromHydGroup('D'));
+  assert.equal(fromSurvey.soilBasis.drainageClass, 'Poorly drained');
+  assert.ok(fromSurvey.siteWarnings.length > 0);
 });
 
 test('soil classification follows the texture triangle', () => {
