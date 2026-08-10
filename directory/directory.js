@@ -480,10 +480,17 @@ function b64urlDecode(encoded) {
   return new TextDecoder().decode(bytes);
 }
 
-// Trailing blanks cost URL length and carry no information.
+// Trailing blanks cost URL length and carry no information. An empty address
+// or an empty people list is just as blank as an empty string, and a household
+// with neither is exactly the sparse case worth keeping the link short for.
+function isBlank(v) {
+  if (v === '' || v === undefined || v === null) return true;
+  return Array.isArray(v) && v.length === 0;
+}
+
 function trimTrailing(arr) {
   const out = arr.slice();
-  while (out.length && (out[out.length - 1] === '' || out[out.length - 1] === undefined)) out.pop();
+  while (out.length && isBlank(out[out.length - 1])) out.pop();
   return out;
 }
 
