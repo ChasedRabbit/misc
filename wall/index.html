@@ -143,11 +143,6 @@
   .hour-row .t { width: 56px; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
   .hour-row .w { flex: 1; color: var(--text-secondary); }
   .hour-row .s { font-variant-numeric: tabular-nums; color: var(--text-muted); }
-  .hour-head {
-    border-top: none; color: var(--text-muted); font-size: 11px;
-    text-transform: uppercase; letter-spacing: 0.05em; padding-bottom: 2px;
-  }
-  .hour-head .w, .hour-head .t, .hour-head .s { color: var(--text-muted); }
 
   .ground-val { font-size: 22px; font-weight: 600; }
   .meter { height: 10px; border-radius: 5px; background: var(--grid); overflow: hidden; margin: 10px 0 8px; }
@@ -650,19 +645,12 @@ function render() {
     const hours = document.createElement('div');
     hours.className = 'hours';
 
-    const head2 = document.createElement('div');
-    head2.className = 'hour-row hour-head';
-    head2.innerHTML = `<span class="t">Hour</span><span style="width:12px"></span>
-      <span class="w">Every hour starts at 100 — what's taken off</span><span class="s">Score</span>`;
-    hours.append(head2);
-
     for (const h of d.workHours) {
       const row = document.createElement('div');
       row.className = 'hour-row';
       row.innerHTML = `<span class="t">${fmtHour(h.hour)}</span>
         <span class="dot ${h.bin.key}" style="margin-top:0"></span>
-        <span class="w"></span>
-        <span class="s">${h.score}</span>`;
+        <span class="w"></span>`;
       row.querySelector('.w').textContent = describe(h, a);
       hours.append(row);
     }
@@ -760,43 +748,29 @@ function renderDiagnostics(a) {
     line('warnings', a.siteWarnings.length || 0);
 }
 
+// Plain words for what the engine measured; the score itself is not shown.
+const PHRASE = {
+  'heavy ground': 'ground still heavy',
+  heat: 'hot work',
+  cold: 'cold',
+  wind: 'windy',
+  'rain likely': 'rain likely',
+  'rain possible': 'rain possible',
+  'rain coming': 'rain moving in',
+  'day nearly over': 'day nearly over',
+};
+
 function describe(h, a) {
   if (h.blockers.length) return h.blockers.join(', ');
   const temp = h.heatIndex > h.temp + 3
     ? `${Math.round(h.temp)}° (feels ${Math.round(h.heatIndex)}°)`
     : `${Math.round(h.temp)}°`;
-  const { labels, total } = factorLabels(h.factors);
-  if (!labels.length) return `${temp} · nothing against it`;
-  // The score is clamped at both ends, so the parts don't always reconcile.
-  if (100 + total !== h.score) {
-    return h.score >= 100
-      ? `${temp} · nothing against it`
-      : `${temp} · ${labels.join(' · ')} · floored at ${h.score}`;
-  }
-  return `${temp} · ${labels.join(' · ')}`;
-}
-
-/**
- * Round the deductions so the ones on screen add up to the score on screen.
- * Rounding each in isolation lets them disagree with the total by a point.
- */
-function factorLabels(factors) {
-  let cumulative = 0;
-  let shownSoFar = 0;
-  const parts = [...factors]
-    .sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta))
-    .map((f) => {
-      cumulative += f.delta;
-      const rounded = Math.round(cumulative);
-      const delta = rounded - shownSoFar;
-      shownSoFar = rounded;
-      return { label: f.label, delta };
-    })
-    .filter((f) => f.delta !== 0);
-  return {
-    labels: parts.map((f) => `${f.label} ${f.delta > 0 ? '+' : '−'}${Math.abs(f.delta)}`),
-    total: shownSoFar,
-  };
+  const reasons = h.factors
+    .filter((f) => f.delta <= -3)
+    .sort((x, y) => x.delta - y.delta)
+    .slice(0, 2)
+    .map((f) => PHRASE[f.label] || f.label);
+  return reasons.length ? `${temp} · ${reasons.join(', ')}` : `${temp} · good conditions`;
 }
 
 $('#change-loc').addEventListener('click', () => {
