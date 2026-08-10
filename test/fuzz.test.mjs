@@ -87,6 +87,21 @@ function checkInvariants(a, label) {
     }
     if (h.blockers.length) {
       assert.equal(h.score, 0, `${label}: blocked hour ${h.time} scored ${h.score}`);
+      assert.equal(h.factors.length, 0, `${label}: blocked hour ${h.time} also listed deductions`);
+    }
+
+    // The explanation shown to the reader must reconstruct the score exactly.
+    // An explanation that doesn't add up is worse than no explanation.
+    if (h.score > 1 && h.score < 100) {
+      const sum = h.factors.reduce((a, f) => a + f.delta, 0);
+      assert.equal(
+        Math.round(100 + sum), h.score,
+        `${label}: ${h.time} scored ${h.score} but its factors sum to ${(100 + sum).toFixed(2)}`
+      );
+    }
+    for (const f of h.factors) {
+      assert.ok(typeof f.label === 'string' && f.label.length, `${label}: unlabelled factor at ${h.time}`);
+      assert.ok(Number.isFinite(f.delta) && f.delta !== 0, `${label}: bad factor delta at ${h.time}`);
     }
   }
 

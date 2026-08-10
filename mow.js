@@ -115,40 +115,54 @@ export function scoreHour(h, grass) {
 
   let s = 100;
 
+  // Every adjustment is recorded as it is applied, so the score can always
+  // show its own working rather than arriving as a bare number.
+  const factors = [];
+  const take = (label, amount) => {
+    if (amount >= 0.5) { s -= amount; factors.push({ label, delta: -amount }); }
+  };
+  const give = (label, amount) => {
+    if (amount >= 0.5) { s += amount; factors.push({ label, delta: amount }); }
+  };
+
   // Still a little damp, even if under the limit.
-  s -= (h.wet / WET_LIMIT) * 12;
+  take('damp grass', (h.wet / WET_LIMIT) * 12);
 
   // Heat is the main soft penalty, and where grass type matters most.
-  if (h.temp > grass.heatStart) s -= (h.temp - grass.heatStart) * grass.heatSlope;
-  if (h.temp > 95) s -= (h.temp - 95) * 2.5;
-  if (h.temp < 50) s -= (50 - h.temp) * 0.9;
-  if (h.temp < 40) s -= (40 - h.temp) * 1.6;
+  // Hot + sunny + midday is the worst combination for plant and person alike.
+  let heat = 0;
+  if (h.temp > grass.heatStart) heat += (h.temp - grass.heatStart) * grass.heatSlope;
+  if (h.temp > 95) heat += (h.temp - 95) * 2.5;
+  if (h.temp >= grass.heatStart - 6 && h.cloud < 45 && h.hour >= 11 && h.hour <= 16) heat += 8;
+  take('heat', heat);
 
-  // Hot + sunny + midday is the worst combination for the plant and the person.
-  if (h.temp >= grass.heatStart - 6 && h.cloud < 45 && h.hour >= 11 && h.hour <= 16) s -= 8;
+  let cold = 0;
+  if (h.temp < 50) cold += (50 - h.temp) * 0.9;
+  if (h.temp < 40) cold += (40 - h.temp) * 1.6;
+  take('cold', cold);
 
-  if (h.wind > 18) s -= (h.wind - 18) * 1.6;
+  if (h.wind > 18) take('wind', (h.wind - 18) * 1.6);
 
   // Forecast rain that hasn't committed yet.
-  if (h.precipProb >= 60) s -= 14;
-  else if (h.precipProb >= 40) s -= 6;
+  if (h.precipProb >= 60) take('rain likely', 14);
+  else if (h.precipProb >= 40) take('rain possible', 6);
 
   // Don't start a cut you can't finish.
-  if (h.rainInNext1h) s -= 26;
-  else if (h.rainInNext2h) s -= 12;
+  if (h.rainInNext1h) take('rain within the hour', 26);
+  else if (h.rainInNext2h) take('rain coming', 12);
   if (h.hoursToSunset !== null) {
-    if (h.hoursToSunset < 1.5) s -= 18;
-    else if (h.hoursToSunset < 2.5) s -= 7;
+    if (h.hoursToSunset < 1.5) take('light almost gone', 18);
+    else if (h.hoursToSunset < 2.5) take('light fading', 7);
   }
-  if (h.hoursAfterSunrise !== null && h.hoursAfterSunrise < 2) s -= 6;
+  if (h.hoursAfterSunrise !== null && h.hoursAfterSunrise < 2) take('dew only just off', 6);
 
   // Late afternoon leaves the plant time to recover before the next hot day.
-  if (h.hour >= 16 && h.hour <= 19) s += 6;
+  if (h.hour >= 16 && h.hour <= 19) give('late afternoon', 6);
 
   // Floor at 1. Zero is reserved for blocked hours, which always carry a
   // reason — otherwise punishing-but-possible conditions (a 110° afternoon)
   // would read as "can't mow" with nothing to explain it.
-  return { score: Math.max(1, Math.round(clamp(s, 0, 100))), blockers };
+  return { score: Math.max(1, Math.round(clamp(s, 0, 100))), blockers, factors };
 }
 
 /**
@@ -342,9 +356,10 @@ export function analyze(data, grassKey = 'cool', nowMs = Date.now()) {
       rainInNext2h: rainSoon(2),
       past: i < nowIdx,
     };
-    const { score, blockers } = scoreHour(h, grass);
+    const { score, blockers, factors } = scoreHour(h, grass);
     h.score = score;
     h.blockers = blockers;
+    h.factors = factors || [];
     h.bin = binFor(score, blockers);
     return h;
   });

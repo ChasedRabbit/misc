@@ -336,31 +336,39 @@ export function scoreHour(h, soil) {
 
   let s = 100;
 
+  // Recorded as applied, so the score can show its own working.
+  const factors = [];
+  const take = (label, amount) => {
+    if (amount >= 0.5) { s -= amount; factors.push({ label, delta: -amount }); }
+  };
+
   // Approaching the wet limit is still heavy, sloppy digging.
-  s -= (h.saturation / soil.workLimit) * 14;
+  take('heavy ground', (h.saturation / soil.workLimit) * 14);
 
   // Heat, on a scale that matters for sustained lifting.
-  if (h.heatIndex > 88) s -= (h.heatIndex - 88) * 2.4;
-  else if (h.heatIndex > 80) s -= (h.heatIndex - 80) * 0.8;
+  if (h.heatIndex > 88) take('heat', (h.heatIndex - 88) * 2.4);
+  else if (h.heatIndex > 80) take('heat', (h.heatIndex - 80) * 0.8);
 
   // Cold: block adhesive and mortar won't cure, and hands stop working.
-  if (h.temp < 45) s -= (45 - h.temp) * 1.4;
-  if (h.temp < 38) s -= (38 - h.temp) * 2.0;
+  let cold = 0;
+  if (h.temp < 45) cold += (45 - h.temp) * 1.4;
+  if (h.temp < 38) cold += (38 - h.temp) * 2.0;
+  take('cold', cold);
 
   // An open trench and incoming rain is the worst combination on this job.
-  if (h.rainInNext3h) s -= 22;
-  if (h.precipProb >= 50) s -= 12;
-  else if (h.precipProb >= 30) s -= 5;
+  if (h.rainInNext3h) take('rain coming', 22);
+  if (h.precipProb >= 50) take('rain likely', 12);
+  else if (h.precipProb >= 30) take('rain possible', 5);
 
-  if (h.wind > 25) s -= (h.wind - 25) * 1.2;
+  if (h.wind > 25) take('wind', (h.wind - 25) * 1.2);
 
   // Not enough daylight left to reach a sensible stopping point.
-  if (h.hoursLeftInDay < 2) s -= 12;
+  if (h.hoursLeftInDay < 2) take('day nearly over', 12);
 
   // Floor at 1. Zero is reserved for blocked hours, which always carry a
   // reason — otherwise grim-but-possible conditions would read as "can't
   // work" with nothing to explain it.
-  return { score: Math.max(1, Math.round(clamp(s, 0, 100))), blockers };
+  return { score: Math.max(1, Math.round(clamp(s, 0, 100))), blockers, factors };
 }
 
 /** Contiguous runs of workable hours within one day. */
@@ -533,9 +541,10 @@ export function analyze(data, soilKey = 'loam', nowMs = Date.now(), site = null)
       hoursLeftInDay: WORK_END - hr,
       past: i < nowIdx,
     };
-    const { score, blockers } = scoreHour(h, soil);
+    const { score, blockers, factors } = scoreHour(h, soil);
     h.score = score;
     h.blockers = blockers;
+    h.factors = factors || [];
     h.bin = binFor(score, blockers);
     return h;
   });
