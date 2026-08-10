@@ -455,6 +455,10 @@ export function analyze(data, soilKey = 'loam', nowMs = Date.now(), site = null)
         source: 'measured',
         vwcWork: soil.vwcWork,
         drainRate: soil.drainRate,
+        // Tracked separately: the survey can supply drainage without supplying
+        // texture, in which case the threshold is still a typical figure and
+        // must not be presented as though it were measured.
+        fcFrom: measuredFc ? 'texture' : 'typical',
         drainFrom: site.drainRate ? 'survey' : (measuredDrain ? 'texture' : 'typical'),
         clay: site.clay,
         sand: site.sand,

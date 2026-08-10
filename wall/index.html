@@ -280,6 +280,23 @@ const DAY_START = 7, DAY_END = 18; // strip covers the 7am–7pm working day
 
 const params = new URLSearchParams(location.search);
 const DEMO = params.get('demo') === '1';
+const DEBUG = params.get('debug') === '1';
+
+// Records what each background lookup actually did. These services can't be
+// reached from where this was built, so ?debug=1 is how a real failure gets
+// reported back instead of guessed at.
+const diag = {};
+async function traced(name, fn) {
+  const t0 = Date.now();
+  try {
+    const value = await fn();
+    diag[name] = { ok: value != null, ms: Date.now() - t0, note: value == null ? 'no usable data returned' : 'ok' };
+    return value;
+  } catch (err) {
+    diag[name] = { ok: false, ms: Date.now() - t0, note: `${err.name}: ${err.message}` };
+    return null;
+  }
+}
 
 let state = {
   loc: readJSON(LS.loc),
@@ -351,11 +368,13 @@ async function detectSoil(lat, lon) {
   for (const prop of ['clay', 'sand', 'soc']) url.searchParams.append('property', prop);
 
   // Don't let a slow lookup hold up anything the reader is waiting on.
+  // SoilGrids is often slow under load; this runs in the background after the
+  // forecast is already on screen, so it can afford to wait.
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 8000);
+  const timer = setTimeout(() => ctrl.abort(), 25000);
   try {
     const res = await fetch(url, { signal: ctrl.signal });
-    if (!res.ok) return null;
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const j = await res.json();
     const layers = j?.properties?.layers;
     if (!Array.isArray(layers)) return null;
@@ -392,8 +411,6 @@ async function detectSoil(lat, lon) {
     };
     localStorage.setItem(cacheKey, JSON.stringify(out));
     return out;
-  } catch {
-    return null;
   } finally {
     clearTimeout(timer);
   }
@@ -424,14 +441,12 @@ async function fetchSsurgo(lat, lon) {
       body: JSON.stringify({ query: sql, format: 'JSON+COLUMNNAME' }),
       signal: ctrl.signal,
     });
-    if (!res.ok) return null;
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const j = await res.json();
     const parsed = parseSsurgo(j?.Table);
     // Remember misses too, so we don't re-ask on every load outside the US.
     localStorage.setItem(cacheKey, JSON.stringify(parsed || { empty: true }));
     return parsed;
-  } catch {
-    return null;
   } finally {
     clearTimeout(timer);
   }
@@ -470,13 +485,12 @@ async function load() {
     render();
     // Both lookups run after the forecast is on screen and re-render only if
     // they add something. Every failure here is silent by design.
-    Promise.allSettled([
-      detectSoil(state.loc.lat, state.loc.lon),
-      fetchSsurgo(state.loc.lat, state.loc.lon),
-    ]).then(([texture, survey]) => {
-      const t = texture.status === 'fulfilled' ? texture.value : null;
-      const s = survey.status === 'fulfilled' ? survey.value : null;
-      if (!t && !s) return;
+    Promise.all([
+      traced('soilgrids', () => detectSoil(state.loc.lat, state.loc.lon)),
+      traced('ssurgo', () => fetchSsurgo(state.loc.lat, state.loc.lon)),
+    ]).then(([t, s]) => {
+      state.lookupsDone = true;
+      if (!t && !s) { render(); return; }
       // The survey wins on drainage and identity; SoilGrids supplies texture.
       state.detected = { ...(t || {}), ...(s || {}) };
       const key = t?.key;
@@ -572,7 +586,9 @@ function render() {
     ? (a.dryAt && !a.dryAt.past
         ? `On ${a.soil.label.toLowerCase()} soil it should come good around ${dayLabel(a.dryAt.day)}.`
         : 'Still draining — no clear date in this forecast.')
-    : 'Compaction will hold.';
+    : pct > 75
+      ? 'Close to the limit. It will still compact, but another decent rain and it won\'t.'
+      : 'Compaction will hold.';
   const provenance = a.moisture.source === 'measured'
     ? `Measured soil moisture at ${a.moisture.layer}, about base-course depth.`
     : `Estimated from rainfall${a.moisture.usedEt0 ? ' and evaporation rate' : ''} — this location publishes no soil moisture.`;
@@ -669,17 +685,25 @@ function render() {
     } else if (facts.length) {
       sentences.push(`Survey at 15–60cm: ${facts.join(', ')}`);
     }
-    if (a.soilBasis.source === 'measured' && a.soilBasis.vwcWork) {
+    if (a.soilBasis.fcFrom === 'texture') {
       sentences.push(`Workable below ${a.soilBasis.vwcWork.toFixed(2)} water content, calculated from those figures rather than assumed`);
+    } else {
+      sentences.push(`Water-holding is a typical figure for ${a.soil.label.toLowerCase()} — the survey gave drainage but not texture here`);
     }
     sentences.push('Tap to override');
     $('#soil-examples').textContent = sentences.join('. ') + '.';
   } else if (d && state.soilManual && d.key && d.key !== state.soil) {
     $('#soil-examples').textContent =
       `${a.soil.label}: ${a.soil.examples}. (The survey says ${SOIL[d.key].label.toLowerCase()} here.)`;
+  } else if (state.lookupsDone) {
+    // Say so rather than quietly serving generic numbers as if they were his.
+    $('#soil-examples').textContent =
+      `${a.soil.label}: ${a.soil.examples}. Couldn't reach the soil survey, so these are typical figures for ${a.soil.label.toLowerCase()} rather than measurements of your ground — set it yourself if you know.`;
   } else {
-    $('#soil-examples').textContent = `${a.soil.label}: ${a.soil.examples}. Detected automatically where the survey covers it.`;
+    $('#soil-examples').textContent = `${a.soil.label}: ${a.soil.examples}. Checking the soil survey…`;
   }
+
+  if (DEBUG) renderDiagnostics(a);
 
   const tb = $('#table tbody');
   tb.textContent = '';
@@ -695,6 +719,32 @@ function render() {
   $('#loc-line').textContent = state.loc
     ? `${state.loc.name} · times shown in ${a.timezone || 'local time'}`
     : (DEMO ? 'Demo location' : '');
+}
+
+/** ?debug=1 — what each data source actually did, for reporting problems. */
+function renderDiagnostics(a) {
+  let box = $('#diag');
+  if (!box) {
+    box = document.createElement('section');
+    box.id = 'diag';
+    box.className = 'card';
+    box.style.cssText = 'font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;line-height:1.7';
+    $('#app').append(box);
+  }
+  const line = (k, v) => `<div><b>${k}</b> ${v}</div>`;
+  const src = (n) => {
+    const d = diag[n];
+    if (!d) return 'not run';
+    return `${d.ok ? 'OK' : 'FAILED'} · ${d.ms}ms · ${d.note}`;
+  };
+  box.innerHTML =
+    line('DIAGNOSTICS', '') +
+    line('soil moisture', `${a.moisture.source}${a.moisture.layer ? ' @ ' + a.moisture.layer : ''}${a.moisture.usedEt0 ? ' (ET0)' : ''}`) +
+    line('soilgrids', src('soilgrids')) +
+    line('ssurgo', src('ssurgo')) +
+    line('soil basis', `${a.soilBasis.source} · vwcWork ${a.soilBasis.vwcWork?.toFixed(3)} · drain ${a.soilBasis.drainRate?.toFixed(2)} (${a.soilBasis.drainFrom || 'typical'})`) +
+    line('ground temp', a.hasSoilTemp ? 'real soil temperature' : 'air temperature only') +
+    line('warnings', a.siteWarnings.length || 0);
 }
 
 function describe(h, a) {

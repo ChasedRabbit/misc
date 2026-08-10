@@ -380,6 +380,14 @@ test('analyze prefers survey drainage, then texture, then the bucket', () => {
   const fromTexture = analyze(data, 'clay', NOW, texture);
   assert.equal(fromTexture.soilBasis.drainFrom, 'texture');
 
+  assert.equal(fromTexture.soilBasis.fcFrom, 'texture');
+
+  // Drainage without texture must not be reported as a measured threshold.
+  const drainageOnly = analyze(data, 'clay', NOW, { drainRate: drainRateFromHydGroup('C'), drainageClass: 'Somewhat poorly drained' });
+  assert.equal(drainageOnly.soilBasis.drainFrom, 'survey');
+  assert.equal(drainageOnly.soilBasis.fcFrom, 'typical');
+  assert.equal(drainageOnly.soil.vwcWork, SOIL.clay.vwcWork);
+
   const fromSurvey = analyze(data, 'clay', NOW, { ...texture, drainRate: drainRateFromHydGroup('D'), drainageClass: 'Poorly drained' });
   assert.equal(fromSurvey.soilBasis.drainFrom, 'survey');
   assert.equal(fromSurvey.soilBasis.drainRate, drainRateFromHydGroup('D'));
