@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { analyze, scoreHour, wetnessSeries, growthOutlook, localNowKey, findWindows, GRASS } from '../mow.js';
+import { analyze, scoreHour, wetnessSeries, growthOutlook, localNowKey, findWindows, GRASS, STANDARDS } from '../mow.js';
 import { makeDemoData } from '../demo-data.js';
 
 // Fixed "now" so every run is deterministic: 2026-08-09 09:00 UTC.
@@ -145,6 +145,68 @@ test('recency discount does not override a genuinely better day', () => {
   const laterGood = Array.from({ length: 4 }, (_, i) => ({ score: 96, index: 30 + i, time: `b${i}` }));
   const ws = findWindows([...soonBad, { score: 0, index: 2, time: 'gap' }, ...laterGood]);
   assert.equal(ws[0].hours[0].score, 96, 'a much better day later should still win');
+});
+
+test('a damp lawn blocks the fussy standard and not the relaxed one', () => {
+  // Between balanced's limit (0.45) and relaxed's (0.80): a damp lawn, not a swamp.
+  const damp = { temp: 70, rh: 70, precip: 0, precipProb: 0, wind: 5, cloud: 40, wet: 0.55,
+    hour: 14, isDay: true, hoursToSunset: 5, hoursAfterSunrise: 8, rainInNext1h: false, rainInNext2h: false };
+
+  assert.ok(scoreHour(damp, GRASS.cool, STANDARDS.fussy).blockers.includes('wet grass'));
+  assert.ok(scoreHour(damp, GRASS.cool, STANDARDS.balanced).blockers.includes('wet grass'));
+
+  const relaxed = scoreHour(damp, GRASS.cool, STANDARDS.relaxed);
+  assert.equal(relaxed.blockers.length, 0, 'get-it-done should still cut a damp lawn');
+  assert.ok(relaxed.score > 0);
+  // It should still say the lawn is damp, just not refuse.
+  assert.ok(relaxed.factors.some((f) => f.label === 'damp grass'), 'damp should remain a stated downside');
+});
+
+test('genuinely soaked ground stops every standard', () => {
+  const soaked = { temp: 70, rh: 95, precip: 0, precipProb: 0, wind: 3, cloud: 90, wet: 1.2,
+    hour: 14, isDay: true, hoursToSunset: 5, hoursAfterSunrise: 8, rainInNext1h: false, rainInNext2h: false };
+  for (const std of Object.values(STANDARDS)) {
+    assert.ok(scoreHour(soaked, GRASS.cool, std).blockers.includes('wet grass'), `${std.key} should refuse a swamp`);
+  }
+});
+
+test('rain and darkness stop every standard', () => {
+  const base = { temp: 70, rh: 60, precip: 0, precipProb: 0, wind: 5, cloud: 30, wet: 0.1,
+    hour: 14, isDay: true, hoursToSunset: 5, hoursAfterSunrise: 8, rainInNext1h: false, rainInNext2h: false };
+  for (const std of Object.values(STANDARDS)) {
+    assert.ok(scoreHour({ ...base, precip: 0.2 }, GRASS.cool, std).blockers.includes('raining'));
+    assert.ok(scoreHour({ ...base, isDay: false }, GRASS.cool, std).blockers.includes('dark'));
+    assert.ok(scoreHour({ ...base, temp: 30 }, GRASS.cool, std).blockers.includes('frost'));
+  }
+});
+
+test('relaxed cares less about heat and turf stress than lawn pride', () => {
+  const hot = { temp: 92, rh: 40, precip: 0, precipProb: 0, wind: 5, cloud: 10, wet: 0.05,
+    hour: 13, isDay: true, hoursToSunset: 7, hoursAfterSunrise: 7, rainInNext1h: false, rainInNext2h: false };
+  const relaxed = scoreHour(hot, GRASS.cool, STANDARDS.relaxed).score;
+  const balanced = scoreHour(hot, GRASS.cool, STANDARDS.balanced).score;
+  const fussy = scoreHour(hot, GRASS.cool, STANDARDS.fussy).score;
+  assert.ok(relaxed > balanced && balanced > fussy, `expected relaxed > balanced > fussy, got ${relaxed}/${balanced}/${fussy}`);
+});
+
+test('the standards are ordered — relaxed never offers fewer hours than fussy', () => {
+  for (const seed of [0, 1, 2, 3]) {
+    const data = makeDemoData(NOW, { rainAt: { day: 3 + seed, from: 10, to: 16, rate: 0.06 } });
+    const count = (key) => analyze(data, 'cool', NOW, key)
+      .days.reduce((n, d) => n + d.hours.filter((h) => h.score > 0).length, 0);
+    const [relaxed, balanced, fussy] = ['relaxed', 'balanced', 'fussy'].map(count);
+    assert.ok(relaxed >= balanced, `seed ${seed}: relaxed ${relaxed} < balanced ${balanced}`);
+    assert.ok(balanced >= fussy, `seed ${seed}: balanced ${balanced} < fussy ${fussy}`);
+  }
+});
+
+test('an unknown standard falls back to balanced', () => {
+  const a = analyze(makeDemoData(NOW), 'cool', NOW, 'nonsense');
+  assert.equal(a.standard.key, 'balanced');
+});
+
+test('the chosen standard is reported so the page can name it', () => {
+  assert.equal(analyze(makeDemoData(NOW), 'cool', NOW, 'relaxed').standard.label, 'Get it done');
 });
 
 test('growth outlook responds to heat and moisture', () => {

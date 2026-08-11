@@ -32,10 +32,56 @@ export const GRASS = {
   },
 };
 
-// Wetness above this and the mower will tear, clump and spread disease.
-const WET_LIMIT = 0.33;
-// A run of hours at or above this is worth calling a "window".
-const WINDOW_MIN = 55;
+/**
+ * How much the lawn's preferences are allowed to stop you.
+ *
+ * The engine originally encoded one standard — the one a greenkeeper would
+ * use — and presented it as though it were physics. It isn't. Mowing damp
+ * grass clumps, tears a bit and is harder work; on most lawns that is a
+ * cosmetic cost, not a reason to wait two days. Only rain, darkness, frost
+ * and genuinely soaked ground are hard stops for everyone.
+ */
+export const STANDARDS = {
+  relaxed: {
+    key: 'relaxed',
+    label: 'Get it done',
+    blurb: 'Cuts unless it is raining, dark, frozen or properly soaked. Expect some clumping on a damp lawn.',
+    wetLimit: 0.80,
+    frostAt: 32,
+    rainAt: 0.03,
+    heatScale: 0.6,
+    turfStress: false,
+    lateBonus: false,
+    dewPenalty: false,
+    windowMin: 40,
+  },
+  balanced: {
+    key: 'balanced',
+    label: 'Balanced',
+    blurb: 'Waits for the grass to be mostly dry, but will not hold out for perfect.',
+    wetLimit: 0.45,
+    frostAt: 34,
+    rainAt: 0.012,
+    heatScale: 1,
+    turfStress: true,
+    lateBonus: true,
+    dewPenalty: false,
+    windowMin: 55,
+  },
+  fussy: {
+    key: 'fussy',
+    label: 'Lawn pride',
+    blurb: 'Dry grass only, out of the midday heat, cut at the time that suits the turf best.',
+    wetLimit: 0.25,
+    frostAt: 36,
+    rainAt: 0.01,
+    heatScale: 1.3,
+    turfStress: true,
+    lateBonus: true,
+    dewPenalty: true,
+    windowMin: 65,
+  },
+};
 
 export const BINS = [
   { key: 'go', min: 70, label: 'Good', icon: '✓' },
@@ -105,13 +151,14 @@ export function wetnessSeries({ precip, rh, cloud, wind, temp, isDay }, start = 
  * Score one hour 0–100, plus the human-readable reasons it is unmowable.
  * A blocked hour scores 0 — blockers are not penalties, they are gates.
  */
-export function scoreHour(h, grass) {
+export function scoreHour(h, grass, standard = STANDARDS.balanced) {
+  const std = standard || STANDARDS.balanced;
   const blockers = [];
   if (!h.isDay) blockers.push('dark');
-  if (h.precip > 0.012) blockers.push('raining');
-  if (h.temp <= 34) blockers.push('frost');
-  if (h.wet > WET_LIMIT) blockers.push('wet grass');
-  if (blockers.length) return { score: 0, blockers };
+  if (h.precip > std.rainAt) blockers.push('raining');
+  if (h.temp <= std.frostAt) blockers.push('frost');
+  if (h.wet > std.wetLimit) blockers.push('wet grass');
+  if (blockers.length) return { score: 0, blockers, factors: [] };
 
   let s = 100;
 
@@ -126,14 +173,15 @@ export function scoreHour(h, grass) {
   };
 
   // Still a little damp, even if under the limit.
-  take('damp grass', (h.wet / WET_LIMIT) * 12);
+  take('damp grass', (h.wet / std.wetLimit) * 12);
 
-  // Heat is the main soft penalty, and where grass type matters most.
-  // Hot + sunny + midday is the worst combination for plant and person alike.
+  // Heat is the main soft penalty, and where grass type matters most. The
+  // midday-sun part is turf stress, which only matters if you care about it;
+  // the rest is the person pushing the mower, which everyone feels.
   let heat = 0;
-  if (h.temp > grass.heatStart) heat += (h.temp - grass.heatStart) * grass.heatSlope;
+  if (h.temp > grass.heatStart) heat += (h.temp - grass.heatStart) * grass.heatSlope * std.heatScale;
   if (h.temp > 95) heat += (h.temp - 95) * 2.5;
-  if (h.temp >= grass.heatStart - 6 && h.cloud < 45 && h.hour >= 11 && h.hour <= 16) heat += 8;
+  if (std.turfStress && h.temp >= grass.heatStart - 6 && h.cloud < 45 && h.hour >= 11 && h.hour <= 16) heat += 8;
   take('heat', heat);
 
   let cold = 0;
@@ -154,10 +202,10 @@ export function scoreHour(h, grass) {
     if (h.hoursToSunset < 1.5) take('light almost gone', 18);
     else if (h.hoursToSunset < 2.5) take('light fading', 7);
   }
-  if (h.hoursAfterSunrise !== null && h.hoursAfterSunrise < 2) take('dew only just off', 6);
+  if (std.dewPenalty && h.hoursAfterSunrise !== null && h.hoursAfterSunrise < 2) take('dew only just off', 6);
 
   // Late afternoon leaves the plant time to recover before the next hot day.
-  if (h.hour >= 16 && h.hour <= 19) give('late afternoon', 6);
+  if (std.lateBonus && h.hour >= 16 && h.hour <= 19) give('late afternoon', 6);
 
   // Floor at 1. Zero is reserved for blocked hours, which always carry a
   // reason — otherwise punishing-but-possible conditions (a 110° afternoon)
@@ -174,11 +222,11 @@ export function scoreHour(h, grass) {
  * "mow next Saturday" is bad advice when Tuesday is just as good and the grass
  * is growing the whole time.
  */
-export function findWindows(hours, { decayPerDay = 1.5 } = {}) {
+export function findWindows(hours, { decayPerDay = 1.5, min = 55 } = {}) {
   const windows = [];
   let cur = null;
   for (const h of hours) {
-    if (h.score >= WINDOW_MIN) {
+    if (h.score >= min) {
       if (!cur) cur = { start: h, end: h, hours: [h] };
       else {
         cur.end = h;
@@ -297,8 +345,9 @@ export function growthOutlook(daily, grass) {
  * Main entry point. Takes a raw Open-Meteo response and returns everything the
  * page renders.
  */
-export function analyze(data, grassKey = 'cool', nowMs = Date.now()) {
+export function analyze(data, grassKey = 'cool', nowMs = Date.now(), standardKey = 'balanced') {
   const grass = GRASS[grassKey] || GRASS.cool;
+  const standard = STANDARDS[standardKey] || STANDARDS.balanced;
   const H = data.hourly || {};
   const time = H.time || [];
   const n = time.length;
@@ -356,7 +405,7 @@ export function analyze(data, grassKey = 'cool', nowMs = Date.now()) {
       rainInNext2h: rainSoon(2),
       past: i < nowIdx,
     };
-    const { score, blockers, factors } = scoreHour(h, grass);
+    const { score, blockers, factors } = scoreHour(h, grass, standard);
     h.score = score;
     h.blockers = blockers;
     h.factors = factors || [];
@@ -377,11 +426,11 @@ export function analyze(data, grassKey = 'cool', nowMs = Date.now()) {
   // can never land on a day the reader can't see in the list.
   const shownDays = new Set([...byDay.keys()].slice(0, 7));
   const future = allFuture.filter((h) => shownDays.has(h.day));
-  const windows = findWindows(future);
+  const windows = findWindows(future, { min: standard.windowMin });
 
   const days = [...byDay.entries()].slice(0, 7).map(([day, hs]) => {
     // No recency discount within a single day — we just want that day's best.
-    const dayWindows = findWindows(hs, { decayPerDay: 0 });
+    const dayWindows = findWindows(hs, { decayPerDay: 0, min: standard.windowMin });
     return { day, hours: hs, best: dayWindows[0] || null, peak: Math.max(0, ...hs.map((h) => h.score)) };
   });
 
@@ -397,9 +446,10 @@ export function analyze(data, grassKey = 'cool', nowMs = Date.now()) {
     best: windows[0] || null,
     now: hours[nowIdx] || null,
     // When it's too wet right now, when does that clear?
-    dryAt: hours.slice(nowIdx).find((h) => h.wet <= WET_LIMIT && h.isDay) || null,
+    dryAt: hours.slice(nowIdx).find((h) => h.wet <= standard.wetLimit && h.isDay) || null,
     growth: growthOutlook(daily, grass),
     grass,
+    standard,
     timezone: data.timezone,
   };
 }

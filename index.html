@@ -245,6 +245,17 @@
     </section>
 
     <section class="card">
+      <div class="eyebrow">How fussy are you?</div>
+      <p class="muted" style="margin:6px 0 10px">Only rain, dark, frost and a soaked lawn stop everyone. The rest is up to you.</p>
+      <div class="seg" role="group" aria-label="How fussy are you">
+        <button type="button" data-standard="relaxed" aria-pressed="false">Get it done</button>
+        <button type="button" data-standard="balanced" aria-pressed="false">Balanced</button>
+        <button type="button" data-standard="fussy" aria-pressed="false">Lawn pride</button>
+      </div>
+      <p class="tiny" id="standard-blurb" style="margin:8px 0 0"></p>
+    </section>
+
+    <section class="card">
       <div class="eyebrow">Grass type</div>
       <p class="muted" style="margin:6px 0 10px">Changes how much heat counts against a cut.</p>
       <div class="seg" role="group" aria-label="Grass type">
@@ -272,10 +283,10 @@
 </div>
 
 <script type="module">
-import { analyze, explainNow, fmtHour, fmtWindow, fmtDay, GRASS } from './mow.js';
+import { analyze, explainNow, fmtHour, fmtWindow, fmtDay, GRASS, STANDARDS } from './mow.js';
 
 const $ = (s) => document.querySelector(s);
-const LS = { loc: 'mow.loc', grass: 'mow.grass' };
+const LS = { loc: 'mow.loc', grass: 'mow.grass', standard: 'mow.standard' };
 const DAY_START = 6, DAY_END = 21; // strip covers 6am–9pm
 
 const params = new URLSearchParams(location.search);
@@ -284,6 +295,7 @@ const DEMO = params.get('demo') === '1';
 let state = {
   loc: readJSON(LS.loc),
   grass: localStorage.getItem(LS.grass) || 'cool',
+  standard: localStorage.getItem(LS.standard) || 'balanced',
   data: null,
 };
 
@@ -358,7 +370,7 @@ async function load() {
 function render() {
   let a;
   try {
-    a = analyze(state.data, state.grass);
+    a = analyze(state.data, state.grass, Date.now(), state.standard);
   } catch (err) {
     banner(`Couldn't read the forecast: ${err.message}`, 'err');
     return;
@@ -463,6 +475,10 @@ function render() {
   for (const b of document.querySelectorAll('[data-grass]')) {
     b.setAttribute('aria-pressed', String(b.dataset.grass === state.grass));
   }
+  for (const b of document.querySelectorAll('[data-standard]')) {
+    b.setAttribute('aria-pressed', String(b.dataset.standard === a.standard.key));
+  }
+  $('#standard-blurb').textContent = a.standard.blurb;
   $('#grass-examples').textContent = `${a.grass.label}: ${a.grass.examples}`;
 
   // Full table
@@ -576,6 +592,14 @@ for (const b of document.querySelectorAll('[data-grass]')) {
   b.addEventListener('click', () => {
     state.grass = b.dataset.grass;
     localStorage.setItem(LS.grass, state.grass);
+    if (state.data) render();
+  });
+}
+
+for (const b of document.querySelectorAll('[data-standard]')) {
+  b.addEventListener('click', () => {
+    state.standard = b.dataset.standard;
+    localStorage.setItem(LS.standard, state.standard);
     if (state.data) render();
   });
 }
