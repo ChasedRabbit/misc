@@ -33,23 +33,18 @@ export const GRASS = {
 };
 
 /**
- * How much the lawn's preferences are allowed to stop you.
- *
- * The engine originally encoded one standard — the one a greenkeeper would
- * use — and presented it as though it were physics. It isn't. Mowing damp
- * grass clumps, tears a bit and is harder work; on most lawns that is a
- * cosmetic cost, not a reason to wait two days. Only rain, darkness, frost
- * and genuinely soaked ground are hard stops for everyone.
+ * How much the LAWN's preferences count. This axis is only about the grass:
+ * wet leaves tearing, frost damage, the stress of a cut in midday sun.
  */
 export const STANDARDS = {
   relaxed: {
     key: 'relaxed',
     label: 'Relaxed',
-    blurb: 'Says yes unless it is raining, dark, frozen or properly soaked. A damp lawn will clump a bit — that is your call to make.',
+    blurb: 'Says yes unless it is raining, frozen or properly soaked. A damp lawn will clump a bit — that is your call to make.',
     wetLimit: 0.80,
     frostAt: 32,
     rainAt: 0.03,
-    heatScale: 0.6,
+    turfHeatScale: 0.4,
     turfStress: false,
     lateBonus: false,
     dewPenalty: false,
@@ -62,26 +57,42 @@ export const STANDARDS = {
     wetLimit: 0.45,
     frostAt: 34,
     rainAt: 0.012,
-    heatScale: 1,
+    turfHeatScale: 1,
     turfStress: true,
     lateBonus: true,
     dewPenalty: false,
     windowMin: 55,
   },
-  fussy: {
-    key: 'fussy',
+  strict: {
+    key: 'strict',
     label: 'Strict',
     blurb: 'Dry grass only, out of the midday heat, at the time of day that suits the turf best.',
     wetLimit: 0.25,
     frostAt: 36,
     rainAt: 0.01,
-    heatScale: 1.3,
+    turfHeatScale: 1.4,
     turfStress: true,
     lateBonus: true,
     dewPenalty: true,
     windowMin: 65,
   },
 };
+
+/**
+ * What YOU are willing to work in — a separate question from what the lawn
+ * wants, and independent of it. Someone can chase a perfect lawn and happily
+ * mow at 2pm in 95 degrees; someone else can be relaxed about the grass and
+ * still refuse to mow after dark. One slider could not say either.
+ */
+export const DEFAULT_PREFS = {
+  tolerateHeat: false,
+  afterDark: false,
+};
+
+// Willing to mow in the dark is not willing to mow at three in the morning.
+// These bounds hold whatever anyone has selected — the neighbours get a say.
+const CIVIL_START = 6;
+const CIVIL_END = 22;
 
 export const BINS = [
   { key: 'go', min: 70, label: 'Good', icon: '✓' },
@@ -148,13 +159,31 @@ export function wetnessSeries({ precip, rh, cloud, wind, temp, isDay }, start = 
 }
 
 /**
+ * NWS Rothfusz heat index. What the person pushing the mower actually feels
+ * is this, not the dry-bulb temperature: 84 degrees at 70% humidity is
+ * punishing, and at 25% it is pleasant.
+ */
+export function heatIndex(tempF, rh) {
+  if (tempF < 80) return tempF;
+  const T = tempF;
+  const R = rh;
+  return (
+    -42.379 + 2.04901523 * T + 10.14333127 * R - 0.22475541 * T * R -
+    0.00683783 * T * T - 0.05481717 * R * R + 0.00122874 * T * T * R +
+    0.00085282 * T * R * R - 0.00000199 * T * T * R * R
+  );
+}
+
+/**
  * Score one hour 0–100, plus the human-readable reasons it is unmowable.
  * A blocked hour scores 0 — blockers are not penalties, they are gates.
  */
-export function scoreHour(h, grass, standard = STANDARDS.balanced) {
+export function scoreHour(h, grass, standard = STANDARDS.balanced, prefs = DEFAULT_PREFS) {
   const std = standard || STANDARDS.balanced;
+  const you = { ...DEFAULT_PREFS, ...(prefs || {}) };
   const blockers = [];
-  if (!h.isDay) blockers.push('dark');
+  if (h.hour < CIVIL_START || h.hour >= CIVIL_END) blockers.push('too late at night');
+  else if (!h.isDay && !you.afterDark) blockers.push('dark');
   if (h.precip > std.rainAt) blockers.push('raining');
   if (h.temp <= std.frostAt) blockers.push('frost');
   if (h.wet > std.wetLimit) blockers.push('wet grass');
@@ -175,14 +204,23 @@ export function scoreHour(h, grass, standard = STANDARDS.balanced) {
   // Still a little damp, even if under the limit.
   take('damp grass', (h.wet / std.wetLimit) * 12);
 
-  // Heat is the main soft penalty, and where grass type matters most. The
-  // midday-sun part is turf stress, which only matters if you care about it;
-  // the rest is the person pushing the mower, which everyone feels.
-  let heat = 0;
-  if (h.temp > grass.heatStart) heat += (h.temp - grass.heatStart) * grass.heatSlope * std.heatScale;
-  if (h.temp > 95) heat += (h.temp - 95) * 2.5;
-  if (std.turfStress && h.temp >= grass.heatStart - 6 && h.cloud < 45 && h.hour >= 11 && h.hour <= 16) heat += 8;
-  take('heat', heat);
+  // Heat splits in two, because it is two different complaints.
+  // What the grass suffers: a hot cut sets cool-season turf back.
+  let turfHeat = 0;
+  if (h.temp > grass.heatStart) turfHeat += (h.temp - grass.heatStart) * grass.heatSlope * std.turfHeatScale;
+  if (std.turfStress && h.temp >= grass.heatStart - 6 && h.cloud < 45 && h.hour >= 11 && h.hour <= 16) turfHeat += 8;
+  take('hard on the grass', turfHeat);
+
+  // What the person pushing the mower suffers. Tolerating heat mostly
+  // silences this, but not entirely — past about 100 it stops being taste.
+  const feels = heatIndex(h.temp, h.rh);
+  let ownHeat = 0;
+  if (feels > 82) ownHeat += (feels - 82) * 1.1;
+  if (feels > 95) ownHeat += (feels - 95) * 2.2;
+  take('hot work', you.tolerateHeat ? Math.max(0, ownHeat - 10) * 0.3 : ownHeat);
+
+  // Mowing after dark, when he has said he is willing to.
+  if (!h.isDay) take('dark', 20);
 
   let cold = 0;
   if (h.temp < 50) cold += (50 - h.temp) * 0.9;
@@ -198,7 +236,7 @@ export function scoreHour(h, grass, standard = STANDARDS.balanced) {
   // Don't start a cut you can't finish.
   if (h.rainInNext1h) take('rain within the hour', 26);
   else if (h.rainInNext2h) take('rain coming', 12);
-  if (h.hoursToSunset !== null) {
+  if (h.hoursToSunset !== null && !you.afterDark) {
     if (h.hoursToSunset < 1.5) take('light almost gone', 18);
     else if (h.hoursToSunset < 2.5) take('light fading', 7);
   }
@@ -354,9 +392,11 @@ export function growthOutlook(daily, grass) {
  * Main entry point. Takes a raw Open-Meteo response and returns everything the
  * page renders.
  */
-export function analyze(data, grassKey = 'cool', nowMs = Date.now(), standardKey = 'balanced') {
+export function analyze(data, grassKey = 'cool', nowMs = Date.now(), options = 'balanced') {
+  const opts = typeof options === 'string' ? { standard: options } : (options || {});
   const grass = GRASS[grassKey] || GRASS.cool;
-  const standard = STANDARDS[standardKey] || STANDARDS.balanced;
+  const standard = STANDARDS[opts.standard] || STANDARDS.balanced;
+  const prefs = { ...DEFAULT_PREFS, ...opts };
   const H = data.hourly || {};
   const time = H.time || [];
   const n = time.length;
@@ -414,7 +454,7 @@ export function analyze(data, grassKey = 'cool', nowMs = Date.now(), standardKey
       rainInNext2h: rainSoon(2),
       past: i < nowIdx,
     };
-    const { score, blockers, factors } = scoreHour(h, grass, standard);
+    const { score, blockers, factors } = scoreHour(h, grass, standard, prefs);
     h.score = score;
     h.blockers = blockers;
     h.factors = factors || [];
@@ -459,6 +499,7 @@ export function analyze(data, grassKey = 'cool', nowMs = Date.now(), standardKey
     growth: growthOutlook(daily, grass),
     grass,
     standard,
+    prefs,
     timezone: data.timezone,
   };
 }

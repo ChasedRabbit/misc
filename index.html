@@ -156,6 +156,19 @@
   .seg button { border: none; border-radius: 0; background: none; padding: 9px 12px; font-size: 14px; }
   .seg button[aria-pressed="true"] { background: var(--grid); font-weight: 600; }
 
+  .sublabel {
+    font-size: 12.5px; font-weight: 600; color: var(--text-muted);
+    margin: 16px 0 8px;
+  }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; }
+  .chip {
+    border: 1px solid var(--border); border-radius: 999px;
+    padding: 8px 14px; font-size: 14px; min-height: 40px;
+  }
+  /* A tick, not just a fill — state never rests on colour alone. */
+  .chip[aria-pressed="true"] { background: var(--grid); font-weight: 600; }
+  .chip[aria-pressed="true"]::before { content: "\2713\00a0"; }
+
   form.search { display: flex; gap: 8px; margin-top: 10px; }
   form.search input {
     flex: 1; font: inherit; padding: 10px 12px; min-height: 44px;
@@ -209,14 +222,23 @@
   <main id="app" hidden>
     <!-- Hero: the one number the page leads with -->
     <section class="card">
-      <div class="eyebrow">How strict should this be?</div>
-      <p class="muted" style="margin:6px 0 10px">Rain, darkness, frost and a soaked lawn always stop a cut. Everything after that is your call.</p>
-      <div class="seg" role="group" aria-label="How strict should this be">
+      <div class="eyebrow">Your preferences</div>
+      <p class="muted" style="margin:6px 0 0">Rain, frost and a soaked lawn always stop a cut. The rest is up to you.</p>
+
+      <div class="sublabel">How much does the lawn's comfort matter?</div>
+      <div class="seg" role="group" aria-label="How strict about the grass">
         <button type="button" data-standard="relaxed" aria-pressed="false">Relaxed</button>
         <button type="button" data-standard="balanced" aria-pressed="false">Balanced</button>
-        <button type="button" data-standard="fussy" aria-pressed="false">Strict</button>
+        <button type="button" data-standard="strict" aria-pressed="false">Strict</button>
       </div>
       <p class="tiny" id="standard-blurb" style="margin:8px 0 0"></p>
+
+      <div class="sublabel">And what doesn't stop you?</div>
+      <div class="chips">
+        <button type="button" class="chip" data-pref="tolerateHeat" aria-pressed="false">Heat doesn't bother me</button>
+        <button type="button" class="chip" data-pref="afterDark" aria-pressed="false">I'll mow after dark</button>
+      </div>
+      <p class="tiny" id="pref-blurb" style="margin:8px 0 0"></p>
     </section>
 
     <section class="card" id="hero">
@@ -286,7 +308,7 @@
 import { analyze, explainNow, fmtHour, fmtWindow, fmtDay, GRASS, STANDARDS } from './mow.js';
 
 const $ = (s) => document.querySelector(s);
-const LS = { loc: 'mow.loc', grass: 'mow.grass', standard: 'mow.standard' };
+const LS = { loc: 'mow.loc', grass: 'mow.grass', standard: 'mow.standard', prefs: 'mow.prefs' };
 const DAY_START = 6, DAY_END = 21; // strip covers 6am–9pm
 
 const params = new URLSearchParams(location.search);
@@ -296,6 +318,7 @@ let state = {
   loc: readJSON(LS.loc),
   grass: localStorage.getItem(LS.grass) || 'cool',
   standard: localStorage.getItem(LS.standard) || 'balanced',
+  prefs: readJSON(LS.prefs) || { tolerateHeat: false, afterDark: false },
   data: null,
 };
 
@@ -370,7 +393,7 @@ async function load() {
 function render() {
   let a;
   try {
-    a = analyze(state.data, state.grass, Date.now(), state.standard);
+    a = analyze(state.data, state.grass, Date.now(), { standard: state.standard, ...state.prefs });
   } catch (err) {
     banner(`Couldn't read the forecast: ${err.message}`, 'err');
     return;
@@ -480,6 +503,15 @@ function render() {
     b.setAttribute('aria-pressed', String(b.dataset.standard === a.standard.key));
   }
   $('#standard-blurb').textContent = a.standard.blurb;
+  for (const b of document.querySelectorAll('[data-pref]')) {
+    b.setAttribute('aria-pressed', String(Boolean(a.prefs[b.dataset.pref])));
+  }
+  const on = [];
+  if (a.prefs.tolerateHeat) on.push('hot hours count against the grass but not against you');
+  if (a.prefs.afterDark) on.push('hours after sunset are offered, marked down but allowed');
+  $('#pref-blurb').textContent = on.length
+    ? on.join('; ') + '.'
+    : 'Leave both off and it keeps you in daylight and out of the worst heat.';
   $('#grass-examples').textContent = `${a.grass.label}: ${a.grass.examples}`;
 
   // Full table
@@ -601,6 +633,15 @@ for (const b of document.querySelectorAll('[data-standard]')) {
   b.addEventListener('click', () => {
     state.standard = b.dataset.standard;
     localStorage.setItem(LS.standard, state.standard);
+    if (state.data) render();
+  });
+}
+
+for (const b of document.querySelectorAll('[data-pref]')) {
+  b.addEventListener('click', () => {
+    const key = b.dataset.pref;
+    state.prefs = { ...state.prefs, [key]: !state.prefs[key] };
+    localStorage.setItem(LS.prefs, JSON.stringify(state.prefs));
     if (state.data) render();
   });
 }

@@ -147,12 +147,12 @@ test('recency discount does not override a genuinely better day', () => {
   assert.equal(ws[0].hours[0].score, 96, 'a much better day later should still win');
 });
 
-test('a damp lawn blocks the fussy standard and not the relaxed one', () => {
+test('a damp lawn blocks the strict standard and not the relaxed one', () => {
   // Between balanced's limit (0.45) and relaxed's (0.80): a damp lawn, not a swamp.
   const damp = { temp: 70, rh: 70, precip: 0, precipProb: 0, wind: 5, cloud: 40, wet: 0.55,
     hour: 14, isDay: true, hoursToSunset: 5, hoursAfterSunrise: 8, rainInNext1h: false, rainInNext2h: false };
 
-  assert.ok(scoreHour(damp, GRASS.cool, STANDARDS.fussy).blockers.includes('wet grass'));
+  assert.ok(scoreHour(damp, GRASS.cool, STANDARDS.strict).blockers.includes('wet grass'));
   assert.ok(scoreHour(damp, GRASS.cool, STANDARDS.balanced).blockers.includes('wet grass'));
 
   const relaxed = scoreHour(damp, GRASS.cool, STANDARDS.relaxed);
@@ -180,13 +180,77 @@ test('rain and darkness stop every standard', () => {
   }
 });
 
-test('relaxed cares less about heat and turf stress than lawn pride', () => {
+test('a hot cut worries the strict standard more than the relaxed one', () => {
   const hot = { temp: 92, rh: 40, precip: 0, precipProb: 0, wind: 5, cloud: 10, wet: 0.05,
     hour: 13, isDay: true, hoursToSunset: 7, hoursAfterSunrise: 7, rainInNext1h: false, rainInNext2h: false };
-  const relaxed = scoreHour(hot, GRASS.cool, STANDARDS.relaxed).score;
-  const balanced = scoreHour(hot, GRASS.cool, STANDARDS.balanced).score;
-  const fussy = scoreHour(hot, GRASS.cool, STANDARDS.fussy).score;
-  assert.ok(relaxed > balanced && balanced > fussy, `expected relaxed > balanced > fussy, got ${relaxed}/${balanced}/${fussy}`);
+  const at = (k) => scoreHour(hot, GRASS.cool, STANDARDS[k]).score;
+  assert.ok(at('relaxed') > at('balanced'), `relaxed ${at('relaxed')} vs balanced ${at('balanced')}`);
+  assert.ok(at('balanced') > at('strict'), `balanced ${at('balanced')} vs strict ${at('strict')}`);
+});
+
+test('the two axes are independent — heat tolerance does not loosen the lawn standard', () => {
+  const hot = { temp: 95, rh: 40, precip: 0, precipProb: 0, wind: 5, cloud: 10, wet: 0.05,
+    hour: 13, isDay: true, hoursToSunset: 7, hoursAfterSunrise: 7, rainInNext1h: false, rainInNext2h: false };
+
+  // Tolerating heat helps at every lawn standard...
+  for (const k of ['relaxed', 'balanced', 'strict']) {
+    const off = scoreHour(hot, GRASS.cool, STANDARDS[k], { tolerateHeat: false }).score;
+    const on = scoreHour(hot, GRASS.cool, STANDARDS[k], { tolerateHeat: true }).score;
+    assert.ok(on > off, `${k}: tolerating heat should help (${off} -> ${on})`);
+  }
+
+  // ...but it never makes a strict lawn standard behave like a relaxed one.
+  const strictTough = scoreHour(hot, GRASS.cool, STANDARDS.strict, { tolerateHeat: true }).score;
+  const relaxedSoft = scoreHour(hot, GRASS.cool, STANDARDS.relaxed, { tolerateHeat: true }).score;
+  assert.ok(strictTough < relaxedSoft, 'the grass penalty must survive a tough operator');
+
+  // A damp lawn is the lawn's business; heat tolerance must not unblock it.
+  const damp = { ...hot, temp: 70, wet: 0.55 };
+  assert.ok(scoreHour(damp, GRASS.cool, STANDARDS.strict, { tolerateHeat: true }).blockers.includes('wet grass'));
+});
+
+test('willing to mow after dark unblocks night hours and nothing else', () => {
+  const night = { temp: 68, rh: 70, precip: 0, precipProb: 0, wind: 4, cloud: 30, wet: 0.1,
+    hour: 21, isDay: false, hoursToSunset: -1, hoursAfterSunrise: 15, rainInNext1h: false, rainInNext2h: false };
+
+  assert.ok(scoreHour(night, GRASS.cool, STANDARDS.balanced).blockers.includes('dark'));
+
+  const allowed = scoreHour(night, GRASS.cool, STANDARDS.balanced, { afterDark: true });
+  assert.equal(allowed.blockers.length, 0);
+  assert.ok(allowed.score > 0);
+  // Still says it is dark — it is worse, just not forbidden.
+  assert.ok(allowed.factors.some((f) => f.label === 'dark'), 'darkness should remain a stated downside');
+
+  // It must not unblock the things that are actually about the grass.
+  for (const bad of [{ precip: 0.2 }, { temp: 30 }, { wet: 1.2 }]) {
+    const h = { ...night, ...bad };
+    assert.ok(scoreHour(h, GRASS.cool, STANDARDS.balanced, { afterDark: true }).blockers.length > 0,
+      `after-dark should not excuse ${JSON.stringify(bad)}`);
+  }
+});
+
+test('preferences do nothing on an hour they have no bearing on', () => {
+  const mild = { temp: 70, rh: 50, precip: 0, precipProb: 0, wind: 5, cloud: 40, wet: 0.05,
+    hour: 10, isDay: true, hoursToSunset: 9, hoursAfterSunrise: 4, rainInNext1h: false, rainInNext2h: false };
+  const base = scoreHour(mild, GRASS.cool, STANDARDS.balanced).score;
+  assert.equal(scoreHour(mild, GRASS.cool, STANDARDS.balanced, { tolerateHeat: true }).score, base);
+  assert.equal(scoreHour(mild, GRASS.cool, STANDARDS.balanced, { afterDark: true }).score, base);
+});
+
+test('analyze accepts preferences and reports them back', () => {
+  const a = analyze(makeDemoData(NOW), 'cool', NOW, { standard: 'relaxed', afterDark: true });
+  assert.equal(a.standard.key, 'relaxed');
+  assert.equal(a.prefs.afterDark, true);
+  assert.equal(a.prefs.tolerateHeat, false);
+  // A bare string still means the standard, as it did before.
+  assert.equal(analyze(makeDemoData(NOW), 'cool', NOW, 'strict').standard.key, 'strict');
+});
+
+test('after-dark opens up hours the daylight-only setting cannot reach', () => {
+  const data = makeDemoData(NOW);
+  const count = (opts) => analyze(data, 'cool', NOW, opts)
+    .days.reduce((n, d) => n + d.hours.filter((h) => h.score > 0).length, 0);
+  assert.ok(count({ standard: 'balanced', afterDark: true }) > count({ standard: 'balanced' }));
 });
 
 test('the standards are ordered — relaxed never offers fewer hours than fussy', () => {
@@ -194,7 +258,7 @@ test('the standards are ordered — relaxed never offers fewer hours than fussy'
     const data = makeDemoData(NOW, { rainAt: { day: 3 + seed, from: 10, to: 16, rate: 0.06 } });
     const count = (key) => analyze(data, 'cool', NOW, key)
       .days.reduce((n, d) => n + d.hours.filter((h) => h.score > 0).length, 0);
-    const [relaxed, balanced, fussy] = ['relaxed', 'balanced', 'fussy'].map(count);
+    const [relaxed, balanced, fussy] = ['relaxed', 'balanced', 'strict'].map(count);
     assert.ok(relaxed >= balanced, `seed ${seed}: relaxed ${relaxed} < balanced ${balanced}`);
     assert.ok(balanced >= fussy, `seed ${seed}: balanced ${balanced} < fussy ${fussy}`);
   }
@@ -254,4 +318,18 @@ test('growth reports the plain average temperature behind the degree days', () =
   // 7 days at 30 degrees above the base of 50.
   assert.equal(g.gdd, 210);
   assert.equal(growthOutlook({ time: [] }, GRASS.cool).avgTemp, null);
+});
+
+test('after-dark still refuses the small hours, whatever anyone selects', () => {
+  const night = (hour) => ({ temp: 68, rh: 70, precip: 0, precipProb: 0, wind: 4, cloud: 30, wet: 0.1,
+    hour, isDay: false, hoursToSunset: -1, hoursAfterSunrise: 20, rainInNext1h: false, rainInNext2h: false });
+  const prefs = { afterDark: true };
+
+  for (const hour of [0, 3, 5, 22, 23]) {
+    const r = scoreHour(night(hour), GRASS.cool, STANDARDS.relaxed, prefs);
+    assert.equal(r.score, 0, `${hour}:00 should be out of bounds`);
+    assert.ok(r.blockers.includes('too late at night'), `${hour}:00 should say why`);
+  }
+  // But a dark evening hour inside civilised limits is fine.
+  assert.equal(scoreHour(night(21), GRASS.cool, STANDARDS.relaxed, prefs).blockers.length, 0);
 });
