@@ -53,3 +53,9 @@ jobs:
       - name: Deploy
         id: deployment
         uses: actions/deploy-pages@v4
+        env:
+          # The runner now forces this action onto Node 24, whose stricter
+          # default CA handling rejected the Pages API certificate chain with
+          # "self-signed certificate" and failed two consecutive deploys.
+          # Node's own error message recommends this flag.
+          NODE_OPTIONS: --use-system-ca
