@@ -208,6 +208,17 @@
 
   <main id="app" hidden>
     <!-- Hero: the one number the page leads with -->
+    <section class="card">
+      <div class="eyebrow">How strict should this be?</div>
+      <p class="muted" style="margin:6px 0 10px">Rain, darkness, frost and a soaked lawn always stop a cut. Everything after that is your call.</p>
+      <div class="seg" role="group" aria-label="How strict should this be">
+        <button type="button" data-standard="relaxed" aria-pressed="false">Relaxed</button>
+        <button type="button" data-standard="balanced" aria-pressed="false">Balanced</button>
+        <button type="button" data-standard="fussy" aria-pressed="false">Strict</button>
+      </div>
+      <p class="tiny" id="standard-blurb" style="margin:8px 0 0"></p>
+    </section>
+
     <section class="card" id="hero">
       <div class="eyebrow">Best time to mow</div>
       <div class="hero-figure" id="best-day">—</div>
@@ -223,17 +234,6 @@
           <div class="muted" id="now-why"></div>
         </div>
       </div>
-    </section>
-
-    <section class="card">
-      <div class="eyebrow">How fussy are you?</div>
-      <p class="muted" style="margin:6px 0 10px">Rain, darkness, frost and a soaked lawn always stop a cut. Everything after that is your call.</p>
-      <div class="seg" role="group" aria-label="How fussy are you">
-        <button type="button" data-standard="relaxed" aria-pressed="false">Get it done</button>
-        <button type="button" data-standard="balanced" aria-pressed="false">Balanced</button>
-        <button type="button" data-standard="fussy" aria-pressed="false">Lawn pride</button>
-      </div>
-      <p class="tiny" id="standard-blurb" style="margin:8px 0 0"></p>
     </section>
 
     <section class="card">

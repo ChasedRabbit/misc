@@ -206,7 +206,7 @@ test('an unknown standard falls back to balanced', () => {
 });
 
 test('the chosen standard is reported so the page can name it', () => {
-  assert.equal(analyze(makeDemoData(NOW), 'cool', NOW, 'relaxed').standard.label, 'Get it done');
+  assert.equal(analyze(makeDemoData(NOW), 'cool', NOW, 'relaxed').standard.label, 'Relaxed');
 });
 
 test('growth outlook responds to heat and moisture', () => {

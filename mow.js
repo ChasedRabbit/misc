@@ -44,8 +44,8 @@ export const GRASS = {
 export const STANDARDS = {
   relaxed: {
     key: 'relaxed',
-    label: 'Get it done',
-    blurb: 'Cuts unless it is raining, dark, frozen or properly soaked. Expect some clumping on a damp lawn.',
+    label: 'Relaxed',
+    blurb: 'Says yes unless it is raining, dark, frozen or properly soaked. A damp lawn will clump a bit — that is your call to make.',
     wetLimit: 0.80,
     frostAt: 32,
     rainAt: 0.03,
@@ -58,7 +58,7 @@ export const STANDARDS = {
   balanced: {
     key: 'balanced',
     label: 'Balanced',
-    blurb: 'Waits for the grass to be mostly dry, but will not hold out for perfect.',
+    blurb: 'Waits for the grass to be mostly dry, but does not hold out for perfect.',
     wetLimit: 0.45,
     frostAt: 34,
     rainAt: 0.012,
@@ -70,8 +70,8 @@ export const STANDARDS = {
   },
   fussy: {
     key: 'fussy',
-    label: 'Lawn pride',
-    blurb: 'Dry grass only, out of the midday heat, cut at the time that suits the turf best.',
+    label: 'Strict',
+    blurb: 'Dry grass only, out of the midday heat, at the time of day that suits the turf best.',
     wetLimit: 0.25,
     frostAt: 36,
     rainAt: 0.01,
