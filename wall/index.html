@@ -189,6 +189,7 @@
   <header>
     <h1>Wall Window</h1>
     <span class="spacer"></span>
+    <button class="link-btn" id="refresh" type="button">Refresh</button>
     <button class="link-btn" id="change-loc" type="button">Change location</button>
   </header>
 
@@ -303,6 +304,7 @@ let state = {
   soil: localStorage.getItem(LS.soil) || 'loam',
   // Once he picks a soil type himself, stop overriding him with the survey.
   soilManual: localStorage.getItem(LS.soilManual) === '1',
+  fetchedAt: 0,
   detected: null,
   data: null,
 };
@@ -338,6 +340,7 @@ async function fetchForecast(lat, lon) {
     wind_speed_unit: 'mph',
     precipitation_unit: 'inch',
     timezone: 'auto',
+    current: 'precipitation,rain,weather_code,temperature_2m',
     // Five days of history so the ground's starting wetness is realistic.
     past_days: '5',
     forecast_days: '8',
@@ -482,6 +485,7 @@ async function load() {
   $('#best-day').textContent = 'Loading…';
   try {
     state.data = await fetchForecast(state.loc.lat, state.loc.lon);
+    state.fetchedAt = Date.now();
     render();
     // Both lookups run after the forecast is on screen and re-render only if
     // they add something. Every failure here is silent by design.
@@ -571,7 +575,9 @@ function render() {
     $('#now-dot').className = `dot ${a.now.bin.key}`;
     $('#now-word').textContent = a.now.blockers.length ? "Can't work now" : a.now.bin.label + ' right now';
     $('#now-time').textContent = `· ${fmtHour(a.now.hour)}`;
-    $('#now-why').textContent = explainNow(a);
+    $('#now-why').textContent = a.observedRain
+      ? "It's raining right now. The hourly forecast didn't have this — going by what's actually happening."
+      : explainNow(a);
   }
 
   // Ground condition meter
@@ -717,8 +723,12 @@ function render() {
     tb.append(tr);
   }
 
+  const age = state.fetchedAt ? Math.round((Date.now() - state.fetchedAt) / 60000) : null;
+  const freshness = age === null ? '' :
+    age < 1 ? ' · updated just now' :
+    age < 60 ? ` · updated ${age} min ago` : ' · out of date, tap refresh';
   $('#loc-line').textContent = state.loc
-    ? `${state.loc.name} · times shown in ${a.timezone || 'local time'}`
+    ? `${state.loc.name} · times shown in ${a.timezone || 'local time'}${freshness}`
     : (DEMO ? 'Demo location' : '');
 }
 
@@ -772,6 +782,18 @@ function describe(h, a) {
     .map((f) => PHRASE[f.label] || f.label);
   return reasons.length ? `${temp} · ${reasons.join(', ')}` : `${temp} · good conditions`;
 }
+
+$('#refresh').addEventListener('click', () => load());
+
+// Resumed rather than reloaded on a home screen — refetch if it has gone stale.
+const REFRESH_AFTER = 10 * 60 * 1000;
+function refreshIfStale() {
+  if (DEMO || !state.loc) return;
+  if (Date.now() - state.fetchedAt > REFRESH_AFTER) load();
+}
+document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshIfStale(); });
+window.addEventListener('pageshow', (e) => { if (e.persisted) refreshIfStale(); });
+window.addEventListener('focus', refreshIfStale);
 
 $('#change-loc').addEventListener('click', () => {
   showSetup(true);

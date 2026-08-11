@@ -202,6 +202,7 @@
   <header>
     <h1>Mow Window</h1>
     <span class="spacer"></span>
+    <button class="link-btn" id="refresh" type="button">Refresh</button>
     <button class="link-btn" id="change-loc" type="button">Change location</button>
   </header>
 
@@ -318,6 +319,7 @@ let state = {
   loc: readJSON(LS.loc),
   grass: localStorage.getItem(LS.grass) || 'cool',
   standard: localStorage.getItem(LS.standard) || 'balanced',
+  fetchedAt: 0,
   prefs: readJSON(LS.prefs) || { tolerateHeat: false, afterDark: false },
   data: null,
 };
@@ -345,6 +347,8 @@ async function fetchForecast(lat, lon) {
     wind_speed_unit: 'mph',
     precipitation_unit: 'inch',
     timezone: 'auto',
+    // What is happening right now, which the hourly model may not know about.
+    current: 'precipitation,rain,weather_code,temperature_2m,relative_humidity_2m',
     past_days: '3',
     forecast_days: '8',
   });
@@ -383,6 +387,7 @@ async function load() {
   $('#best-day').textContent = 'Loading…';
   try {
     state.data = await fetchForecast(state.loc.lat, state.loc.lon);
+    state.fetchedAt = Date.now();
     render();
   } catch (err) {
     $('#best-day').textContent = '—';
@@ -426,7 +431,9 @@ function render() {
     $('#now-dot').className = `dot ${a.now.bin.key}`;
     $('#now-word').textContent = a.now.blockers.length ? "Don't mow now" : a.now.bin.label + ' right now';
     $('#now-time').textContent = `· ${fmtHour(a.now.hour)}`;
-    $('#now-why').textContent = explainNow(a);
+    $('#now-why').textContent = a.observedRain
+      ? "It's raining right now. The hourly forecast didn't have this — going by what's actually happening."
+      : explainNow(a);
   }
 
   // Week
@@ -525,8 +532,12 @@ function render() {
     tb.append(tr);
   }
 
+  const age = state.fetchedAt ? Math.round((Date.now() - state.fetchedAt) / 60000) : null;
+  const freshness = age === null ? '' :
+    age < 1 ? ' · updated just now' :
+    age < 60 ? ` · updated ${age} min ago` : ' · out of date, tap refresh';
   $('#loc-line').textContent = state.loc
-    ? `${state.loc.name} · times shown in ${a.timezone || 'local time'}`
+    ? `${state.loc.name} · times shown in ${a.timezone || 'local time'}${freshness}`
     : (DEMO ? 'Demo location' : '');
 }
 
@@ -564,6 +575,20 @@ function describe(h) {
 }
 
 // --- Location handling ---
+
+$('#refresh').addEventListener('click', () => load());
+
+// A home-screen app is resumed, not reloaded: without this it can sit there
+// showing this morning's forecast all afternoon. Standing in a storm while the
+// page says "mostly sunny" is partly this.
+const REFRESH_AFTER = 10 * 60 * 1000;
+function refreshIfStale() {
+  if (DEMO || !state.loc) return;
+  if (Date.now() - state.fetchedAt > REFRESH_AFTER) load();
+}
+document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshIfStale(); });
+window.addEventListener('pageshow', (e) => { if (e.persisted) refreshIfStale(); });
+window.addEventListener('focus', refreshIfStale);
 
 $('#change-loc').addEventListener('click', () => {
   showSetup(true);

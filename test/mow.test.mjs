@@ -333,3 +333,70 @@ test('after-dark still refuses the small hours, whatever anyone selects', () => 
   // But a dark evening hour inside civilised limits is fine.
   assert.equal(scoreHour(night(21), GRASS.cool, STANDARDS.relaxed, prefs).blockers.length, 0);
 });
+
+test('a storm happening now overrides a forecast that missed it', () => {
+  // The situation from the field: pouring outside, model says mostly sunny.
+  const data = makeDemoData(NOW);
+  const nowKey = localNowKey(0, NOW);
+  const idx = data.hourly.time.indexOf(nowKey);
+  assert.ok(idx > 0);
+  assert.equal(data.hourly.precipitation[idx], 0, 'forecast has no rain this hour');
+
+  const before = analyze(data, 'cool', NOW);
+  assert.equal(before.now.blockers.includes('raining'), false);
+  assert.equal(before.observedRain, false);
+
+  const observed = makeDemoData(NOW);
+  observed.current = { time: nowKey, precipitation: 0.22, weather_code: 95 };
+  const after = analyze(observed, 'cool', NOW);
+
+  assert.equal(after.observedRain, true, 'should report that observation overrode forecast');
+  assert.ok(after.now.blockers.includes('raining'), 'must say it is raining');
+});
+
+test('an observed storm wets the grass for the hours after it, not just now', () => {
+  const nowKey = localNowKey(0, NOW);
+  const dry = analyze(makeDemoData(NOW), 'cool', NOW);
+
+  const stormy = makeDemoData(NOW);
+  stormy.current = { time: nowKey, precipitation: 0.3, weather_code: 95 };
+  const wet = analyze(stormy, 'cool', NOW);
+
+  const i = wet.hours.findIndex((h) => h.time === nowKey);
+  // Several hours later the lawn should still be wetter than it would be.
+  for (const ahead of [1, 2, 3]) {
+    assert.ok(wet.hours[i + ahead].wet > dry.hours[i + ahead].wet,
+      `hour +${ahead} should still be wetter after the storm`);
+  }
+});
+
+test('a weather code alone is enough, with no measured amount', () => {
+  const nowKey = localNowKey(0, NOW);
+  const data = makeDemoData(NOW);
+  data.current = { time: nowKey, precipitation: 0, weather_code: 61 }; // light rain
+  assert.equal(analyze(data, 'cool', NOW).observedRain, true);
+});
+
+test('a dry observation never invents rain or contradicts a wet forecast', () => {
+  const nowKey = localNowKey(0, NOW);
+  const clear = makeDemoData(NOW);
+  clear.current = { time: nowKey, precipitation: 0, weather_code: 0 };
+  assert.equal(analyze(clear, 'cool', NOW).observedRain, false);
+
+  // A forecast wetter than the observation must not be watered down.
+  const data = makeDemoData(NOW);
+  const idx = data.hourly.time.indexOf(nowKey);
+  data.hourly.precipitation[idx] = 0.5;
+  data.current = { time: nowKey, precipitation: 0.01, weather_code: 61 };
+  const a = analyze(data, 'cool', NOW);
+  assert.equal(a.hours[idx].precip, 0.5, 'the heavier forecast should stand');
+});
+
+test('a missing or malformed current block changes nothing', () => {
+  const base = analyze(makeDemoData(NOW), 'cool', NOW).now.score;
+  for (const current of [undefined, null, {}, { precipitation: 'wet' }, { weather_code: null }]) {
+    const d = makeDemoData(NOW);
+    d.current = current;
+    assert.equal(analyze(d, 'cool', NOW).now.score, base);
+  }
+});

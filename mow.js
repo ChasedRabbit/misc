@@ -119,6 +119,48 @@ function col(obj, name, len, fallback) {
 const dayOf = (t) => String(t).slice(0, 10);
 const hourOf = (t) => Number(String(t).slice(11, 13));
 
+// Weather codes that mean water is falling right now: drizzle, rain, freezing
+// rain, snow, showers and thunderstorms.
+const WET_CODES = new Set([
+  51, 53, 55, 56, 57, 61, 63, 65, 66, 67,
+  71, 73, 75, 77, 80, 81, 82, 85, 86, 95, 96, 99,
+]);
+
+/**
+ * Fold observed current conditions into the hourly series.
+ *
+ * The hourly precipitation column is model output, not a measurement, and
+ * convective storms are precisely what an hours-old model run misses. Standing
+ * in a downpour while the app says "mostly sunny" is the failure this fixes:
+ * what is actually happening now overrides what was forecast for now, and
+ * because the substitution happens before the wetness balance runs, the soaking
+ * carries forward into the hours after it too.
+ *
+ * @returns true when the observation contradicted the forecast
+ */
+export function applyObservation(hourly, current, nowIdx) {
+  if (!current || !Array.isArray(hourly.precipitation) || nowIdx == null) return false;
+  const i = nowIdx;
+  if (i < 0 || i >= hourly.precipitation.length) return false;
+
+  const observed = Number(current.precipitation ?? current.rain ?? 0);
+  const raining = Number.isFinite(observed) && observed > 0;
+  const codeSaysWet = WET_CODES.has(Number(current.weather_code));
+  if (!raining && !codeSaysWet) return false;
+
+  const forecast = Number(hourly.precipitation[i]) || 0;
+  // A code with no amount still means rain; assume a light shower.
+  const amount = Math.max(forecast, raining ? observed : 0.04);
+  if (amount <= forecast) return false;
+
+  hourly.precipitation[i] = amount;
+  if (Array.isArray(hourly.precipitation_probability)) hourly.precipitation_probability[i] = 100;
+  if (Array.isArray(hourly.relative_humidity_2m)) {
+    hourly.relative_humidity_2m[i] = Math.max(Number(hourly.relative_humidity_2m[i]) || 0, 95);
+  }
+  return true;
+}
+
 /**
  * Local wall-clock "YYYY-MM-DDTHH:00" at the forecast location, derived from
  * the UTC offset the API reports. Avoids pulling in a timezone library.
@@ -410,6 +452,18 @@ export function analyze(data, grassKey = 'cool', nowMs = Date.now(), options = '
   const cloud = col(H, 'cloud_cover', n, 50);
   const isDayRaw = col(H, 'is_day', n, 1);
 
+  const nowKey = localNowKey(data.utc_offset_seconds, nowMs);
+  let nowIdx = time.indexOf(nowKey);
+  if (nowIdx === -1) nowIdx = time.findIndex((t) => t >= nowKey);
+  if (nowIdx === -1) nowIdx = 0;
+
+  // What is happening outside beats what was forecast to happen outside.
+  const observedRain = applyObservation(
+    { precipitation: precip, precipitation_probability: precipProb, relative_humidity_2m: rh },
+    data.current,
+    nowIdx
+  );
+
   const wet = wetnessSeries({ precip, rh, cloud, wind, temp, isDay: isDayRaw.map(Boolean) });
 
   // Sunrise/sunset per calendar day, for "can I finish before dark".
@@ -421,11 +475,6 @@ export function analyze(data, grassKey = 'cool', nowMs = Date.now(), options = '
       set: D.sunset && D.sunset[i] ? hourOf(D.sunset[i]) + Number(String(D.sunset[i]).slice(14, 16)) / 60 : 20,
     };
   });
-
-  const nowKey = localNowKey(data.utc_offset_seconds, nowMs);
-  let nowIdx = time.indexOf(nowKey);
-  if (nowIdx === -1) nowIdx = time.findIndex((t) => t >= nowKey);
-  if (nowIdx === -1) nowIdx = 0;
 
   const hours = time.map((t, i) => {
     const d = dayOf(t);
@@ -500,6 +549,7 @@ export function analyze(data, grassKey = 'cool', nowMs = Date.now(), options = '
     grass,
     standard,
     prefs,
+    observedRain,
     timezone: data.timezone,
   };
 }

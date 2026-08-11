@@ -443,6 +443,25 @@ export function cureRisk(day, hoursAfter) {
  *             the workable water content is computed from them instead of
  *             taken from the three-bucket table.
  */
+// Weather codes meaning water is falling right now.
+const WET_CODES = new Set([
+  51, 53, 55, 56, 57, 61, 63, 65, 66, 67,
+  71, 73, 75, 77, 80, 81, 82, 85, 86, 95, 96, 99,
+]);
+
+/** Observed conditions beat an hours-old model run. See mow.js for the why. */
+export function applyObservation(precip, current, nowIdx) {
+  if (!current || !Array.isArray(precip)) return false;
+  if (nowIdx < 0 || nowIdx >= precip.length) return false;
+  const observed = Number(current.precipitation ?? current.rain ?? 0);
+  const raining = Number.isFinite(observed) && observed > 0;
+  if (!raining && !WET_CODES.has(Number(current.weather_code))) return false;
+  const amount = Math.max(Number(precip[nowIdx]) || 0, raining ? observed : 0.04);
+  if (amount <= (Number(precip[nowIdx]) || 0)) return false;
+  precip[nowIdx] = amount;
+  return true;
+}
+
 export function analyze(data, soilKey = 'loam', nowMs = Date.now(), site = null) {
   const bucket = SOIL[soilKey] || SOIL.loam;
 
@@ -496,6 +515,12 @@ export function analyze(data, soilKey = 'loam', nowMs = Date.now(), site = null)
 
   // Prefer the land-surface model's own soil moisture over inferring it from
   // rainfall. Fall back to the estimator when the model doesn't publish it.
+  const nowKeyEarly = localNowKey(data.utc_offset_seconds, nowMs);
+  let nowIdxEarly = time.indexOf(nowKeyEarly);
+  if (nowIdxEarly === -1) nowIdxEarly = time.findIndex((t) => t >= nowKeyEarly);
+  if (nowIdxEarly === -1) nowIdxEarly = 0;
+  const observedRain = applyObservation(precip, data.current, nowIdxEarly);
+
   const layer = pickMoistureLayer(H, n);
   const sat = layer
     ? saturationFromMeasured(col(H, layer.key, n, null), soil)
@@ -509,10 +534,7 @@ export function analyze(data, soilKey = 'loam', nowMs = Date.now(), site = null)
     usedEt0: !layer && Array.isArray(et0) && et0.some((v) => v > 0),
   };
 
-  const nowKey = localNowKey(data.utc_offset_seconds, nowMs);
-  let nowIdx = time.indexOf(nowKey);
-  if (nowIdx === -1) nowIdx = time.findIndex((t) => t >= nowKey);
-  if (nowIdx === -1) nowIdx = 0;
+  const nowIdx = nowIdxEarly;
 
   const hours = time.map((t, i) => {
     const hr = hourOf(t);
@@ -601,6 +623,7 @@ export function analyze(data, soilKey = 'loam', nowMs = Date.now(), site = null)
     dryAt: hours.slice(nowIdx).find((h) => h.saturation <= soil.workLimit) || null,
     soil,
     soilBasis,
+    observedRain,
     siteWarnings: siteWarnings(site),
     hasSoilTemp,
     moisture,
