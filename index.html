@@ -226,6 +226,17 @@
     </section>
 
     <section class="card">
+      <div class="eyebrow">How fussy are you?</div>
+      <p class="muted" style="margin:6px 0 10px">Rain, darkness, frost and a soaked lawn always stop a cut. Everything after that is your call.</p>
+      <div class="seg" role="group" aria-label="How fussy are you">
+        <button type="button" data-standard="relaxed" aria-pressed="false">Get it done</button>
+        <button type="button" data-standard="balanced" aria-pressed="false">Balanced</button>
+        <button type="button" data-standard="fussy" aria-pressed="false">Lawn pride</button>
+      </div>
+      <p class="tiny" id="standard-blurb" style="margin:8px 0 0"></p>
+    </section>
+
+    <section class="card">
       <div class="eyebrow">This week</div>
       <div class="legend" aria-hidden="true">
         <span><i style="background:var(--go)"></i> Good</span>
@@ -242,17 +253,6 @@
       <div class="growth-val" id="growth-label">—</div>
       <p class="muted" id="growth-note" style="margin:4px 0 0"></p>
       <p class="tiny" id="growth-detail" style="margin:8px 0 0"></p>
-    </section>
-
-    <section class="card">
-      <div class="eyebrow">How fussy are you?</div>
-      <p class="muted" style="margin:6px 0 10px">Only rain, dark, frost and a soaked lawn stop everyone. The rest is up to you.</p>
-      <div class="seg" role="group" aria-label="How fussy are you">
-        <button type="button" data-standard="relaxed" aria-pressed="false">Get it done</button>
-        <button type="button" data-standard="balanced" aria-pressed="false">Balanced</button>
-        <button type="button" data-standard="fussy" aria-pressed="false">Lawn pride</button>
-      </div>
-      <p class="tiny" id="standard-blurb" style="margin:8px 0 0"></p>
     </section>
 
     <section class="card">
@@ -468,8 +468,9 @@ function render() {
   // Growth
   $('#growth-label').textContent = a.growth.label;
   $('#growth-note').textContent = a.growth.note;
-  $('#growth-detail').textContent =
-    `${a.growth.gdd} growing degree days and ${a.growth.rain.toFixed(2)}" of rain across the window · typical gap ${a.growth.daysBetween} days`;
+  $('#growth-detail').textContent = a.growth.avgTemp != null
+    ? `Averaging ${a.growth.avgTemp}° with ${a.growth.rain.toFixed(2)}" of rain this week · usually about ${a.growth.daysBetween} days between cuts`
+    : `Usually about ${a.growth.daysBetween} days between cuts`;
 
   // Grass toggle
   for (const b of document.querySelectorAll('[data-grass]')) {

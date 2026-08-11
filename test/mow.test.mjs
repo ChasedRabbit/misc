@@ -240,3 +240,18 @@ test('missing optional columns fall back instead of throwing', () => {
 test('an empty forecast is reported, not silently rendered', () => {
   assert.throws(() => analyze({ hourly: { time: [] } }, 'cool', NOW), /No hourly data/);
 });
+
+test('growth reports the plain average temperature behind the degree days', () => {
+  const daily = {
+    time: Array.from({ length: 10 }, (_, i) => `2026-08-0${i}`),
+    temperature_2m_max: new Array(10).fill(90),
+    temperature_2m_min: new Array(10).fill(70),
+    precipitation_sum: new Array(10).fill(0.1),
+    pastDays: 3,
+  };
+  const g = growthOutlook(daily, GRASS.cool);
+  assert.equal(g.avgTemp, 80, 'mean of 90 and 70');
+  // 7 days at 30 degrees above the base of 50.
+  assert.equal(g.gdd, 210);
+  assert.equal(growthOutlook({ time: [] }, GRASS.cool).avgTemp, null);
+});

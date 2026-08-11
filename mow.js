@@ -295,7 +295,7 @@ export function growthOutlook(daily, grass) {
   const times = (daily && daily.time) || [];
   const n = times.length;
   if (!n) {
-    return { label: 'Unknown', daysBetween: 7, note: 'No daily summary available, so growth cannot be estimated.', gdd: 0, rain: 0, index: 0 };
+    return { label: 'Unknown', daysBetween: 7, note: 'No daily summary available, so growth cannot be estimated.', gdd: 0, rain: 0, index: 0, avgTemp: null };
   }
   const tmax = col(daily, 'temperature_2m_max', n, 70);
   const tmin = col(daily, 'temperature_2m_min', n, 50);
@@ -304,9 +304,12 @@ export function growthOutlook(daily, grass) {
   const todayIdx = Math.max(0, daily.pastDays || 0);
   let gdd = 0;
   let futureRain = 0;
+  let tempSum = 0;
   let days = 0;
   for (let i = todayIdx; i < n && days < 7; i++, days++) {
-    gdd += Math.max(0, (tmax[i] + tmin[i]) / 2 - grass.gddBase);
+    const mean = (tmax[i] + tmin[i]) / 2;
+    gdd += Math.max(0, mean - grass.gddBase);
+    tempSum += mean;
     futureRain += rain[i];
   }
   let pastRain = 0;
@@ -338,7 +341,13 @@ export function growthOutlook(daily, grass) {
       ? 'Dry enough that the lawn is coasting. Cutting a stressed lawn does more harm than good — consider skipping.'
       : 'Too cool for much growth. Skipping a week is fine.';
   }
-  return { label, daysBetween, note, gdd: Math.round(gdd), rain: Math.round(moisture * 100) / 100, index };
+  return {
+    label, daysBetween, note, index,
+    gdd: Math.round(gdd),
+    rain: Math.round(moisture * 100) / 100,
+    // The plain figure behind the degree-day sum, for saying it in English.
+    avgTemp: days ? Math.round(tempSum / days) : null,
+  };
 }
 
 /**
